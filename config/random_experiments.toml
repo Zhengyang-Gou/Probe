@@ -1,0 +1,31 @@
+[experiment]
+runs = 200
+seed = 7
+
+[grid]
+rows = 10
+cols = 10
+
+[delay]
+model = "leo"
+period_slots = 8
+
+[leo_delay]
+intra_delay = 1.0
+inter_min_delay = 1.2
+inter_max_delay = 3.0
+
+[random_delay]
+min_delay = 0.8
+max_delay = 3.0
+
+[failure]
+down_probability = 0
+
+[traversal]
+obs_ttl = 4.0
+max_hop = 0
+alpha = 0.85
+
+[simulation]
+step_time = 1.0
