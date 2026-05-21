@@ -5,6 +5,7 @@ from adaptive_leo_traversal.cycle import cycle_targets, make_grid_hamiltonian_cy
 from adaptive_leo_traversal.models import (
     LinkObservation,
     LinkState,
+    NodeTelemetryRecord,
     PathDecision,
     ProbeState,
     TraversalResult,
@@ -21,6 +22,7 @@ __all__ = [
     "LinkObservation",
     "LinkObservationTable",
     "LinkState",
+    "NodeTelemetryRecord",
     "PathDecision",
     "ProbeState",
     "Topology",

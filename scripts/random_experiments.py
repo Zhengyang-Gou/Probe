@@ -277,6 +277,12 @@ def summarize(results: list[ExperimentResult]) -> str:
     finished = [result for result in results if result.status is TraversalStatus.FINISHED]
     status_counts = Counter(result.status.value for result in results)
     success_rate = len(finished) / len(results) if results else 0.0
+
+    def successful_mean(values: Callable[[ExperimentResult], float], precision: int = 2) -> str:
+        if not finished:
+            return "n/a"
+        return f"{mean(values(result) for result in finished):.{precision}f}"
+
     return "\n".join(
         [
             "",
@@ -286,13 +292,13 @@ def summarize(results: list[ExperimentResult]) -> str:
             f"finished: {len(finished)}",
             f"success_rate: {success_rate:.2%}",
             f"status_counts: {dict(sorted(status_counts.items()))}",
-            f"mean_hops: {mean(result.hop_count for result in results):.2f}",
-            f"mean_actual_delay: {mean(result.total_delay for result in results):.2f}",
-            f"mean_finish_time: {mean(result.finish_time for result in results):.2f}",
-            f"mean_visited: {mean(result.visited_count for result in results):.4f}",
+            f"mean_hops: {successful_mean(lambda result: result.hop_count)}",
+            f"mean_actual_delay: {successful_mean(lambda result: result.total_delay)}",
+            f"mean_finish_time: {successful_mean(lambda result: result.finish_time)}",
+            f"mean_visited: {successful_mean(lambda result: result.visited_count, precision=4)}",
             f"min_visited: {min(result.visited_count for result in results)}",
-            f"mean_active_down_edges: {mean(result.mean_active_down_edges for result in results):.2f}",
-            f"mean_max_active_down_edges: {mean(result.max_active_down_edges for result in results):.2f}",
+            f"mean_active_down_edges: {successful_mean(lambda result: result.mean_active_down_edges)}",
+            f"mean_max_active_down_edges: {successful_mean(lambda result: result.max_active_down_edges)}",
         ]
     )
 

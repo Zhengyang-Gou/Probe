@@ -65,17 +65,29 @@ class LinkObservation:
 
 
 @dataclass(slots=True)
+class NodeTelemetryRecord:
+    """Telemetry collected when the probe reaches one requested telemetry node."""
+
+    node: int
+    observed_time: float
+    links: list[LinkObservation]
+
+
+@dataclass(slots=True)
 class ProbeState:
-    """Mutable traversal state carried by the simulated probe."""
+    """Mutable packet state carried by the simulated probe."""
 
     root: int
     current_node: int
+    next_telemetry_node: int | None = None
     visited: set[int] = field(default_factory=set)
     current_path: list[int] = field(default_factory=list)
     path_index: int = 0
     hop_count: int = 0
+    hop_limit: int | None = None
     last_slot: int | None = None
     link_obs_table: LinkObservationTable = field(default_factory=_new_link_observation_table)
+    telemetry_record: list[NodeTelemetryRecord] = field(default_factory=list)
 
 
 @dataclass(slots=True)

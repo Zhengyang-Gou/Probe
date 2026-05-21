@@ -20,7 +20,7 @@ min_delay = 0.8
 max_delay = 3.0
 
 [failure]
-down_probability = 0
+down_probability = 0.2
 
 [traversal]
 obs_ttl = 4.0

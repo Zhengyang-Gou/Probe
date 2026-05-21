@@ -1,17 +1,21 @@
 # adaptive-leo-traversal
 
-`adaptive-leo-traversal` is a Python 3.11+ reference implementation for simulating and validating an adaptive LEO traversal algorithm under time-varying link delay, recent link observations, and link recovery.
+`adaptive-leo-traversal` is a Python 3.11+ reference implementation for simulating and validating a probe-packet telemetry traversal algorithm for LEO satellite networks.
 
 ## Algorithm Assumptions
 
 - The base topology `G0=(V,E0)` is a fixed undirected graph. In this project edges are normalized as `(min(u, v), max(u, v))`.
 - Without a recent observation, every base link is treated as available by default.
-- There is no predicted link up/down schedule. Link state knowledge comes only from probe observations.
+- A probe carries the next requested telemetry node, its current explicit forwarding path, collected telemetry records, and a hop limit.
+- A satellite only performs telemetry when its node ID matches the probe's `next_telemetry_node`; relay nodes forward without recording telemetry or advancing the target.
+- There is no predicted link up/down schedule. Link state knowledge comes from telemetry-node observations and failed next-hop checks.
 - `LinkObservationTable` stores recent `UP` or `DOWN` observations with a TTL. Newer observations replace older ones.
 - The estimated topology is `Ge(t) = G0 - recent_down_edges(t)`.
 - If a down link is later observed as up, it is reintroduced into `Ge(t)`. If an observation expires, the link returns to default available state.
 - Edge weights come from the current periodic delay slot: `DelayTable[slot(t)][u][v]`.
 - Already visited nodes may be used as relay nodes, but they are excluded as new traversal targets.
+- After a telemetry node chooses its Hamiltonian successor, a healthy direct physical link to that successor is used immediately without recalculating the path.
+- If that direct link is missing or down, or if the current forwarding path cannot continue, the probe replans to the same `next_telemetry_node`.
 
 ## Project Structure
 

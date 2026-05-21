@@ -50,3 +50,9 @@ class LinkObservationTable:
         normalized = normalize_edge(*edge)
         observation = self._observations.get(normalized)
         return None if observation is None else observation.state
+
+    def get_observation(self, edge: Edge, now: float) -> LinkObservation | None:
+        """Return the current recent observation, or ``None`` when default applies."""
+
+        self.remove_expired(now)
+        return self._observations.get(normalize_edge(*edge))
