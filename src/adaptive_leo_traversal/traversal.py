@@ -32,7 +32,6 @@ class AdaptiveTraversalEngine:
     base_topology: Topology
     delay_table: DelayTable
     root: int
-    obs_ttl: float
     max_hop: int
     cycle_route: tuple[int, ...]
     alpha: float = 0.85
@@ -41,8 +40,6 @@ class AdaptiveTraversalEngine:
     def __post_init__(self) -> None:
         if self.root not in self.base_topology.nodes:
             raise ValueError("root must be in base_topology")
-        if self.obs_ttl <= 0:
-            raise ValueError("obs_ttl must be positive")
         if self.max_hop < 0:
             raise ValueError("max_hop must be non-negative")
         if not 0 < self.alpha <= 1:
@@ -83,7 +80,6 @@ class AdaptiveTraversalEngine:
         previous_slot = probe.last_slot
         old_down_edges = probe.link_obs_table.recent_down_edges(now)
 
-        probe.link_obs_table.remove_expired(now)
         if self._all_nodes_visited(probe) and current_node == self.root:
             probe.last_slot = slot
             return TraversalResult(TraversalStatus.FINISHED, probe, path=list(probe.current_path))
@@ -181,7 +177,7 @@ class AdaptiveTraversalEngine:
         observations: list[LinkObservation] = []
         for neighbor in self.base_topology.neighbors(current_node):
             state = provider(current_node, neighbor, now)
-            probe.link_obs_table.update((current_node, neighbor), state, now, self.obs_ttl)
+            probe.link_obs_table.update((current_node, neighbor), state, now)
             observation = probe.link_obs_table.get_observation((current_node, neighbor), now)
             if observation is not None:
                 observations.append(observation)
@@ -217,7 +213,7 @@ class AdaptiveTraversalEngine:
         if next_hop is None:
             return
         if provider(current_node, next_hop, now) is LinkState.DOWN:
-            probe.link_obs_table.update((current_node, next_hop), LinkState.DOWN, now, self.obs_ttl)
+            probe.link_obs_table.update((current_node, next_hop), LinkState.DOWN, now)
 
     def _next_telemetry_target(self, probe: ProbeState, current_node: int) -> int:
         if self._all_nodes_visited(probe):
@@ -243,7 +239,7 @@ class AdaptiveTraversalEngine:
             return None
 
         state = provider(current_node, target, now)
-        probe.link_obs_table.update((current_node, target), state, now, self.obs_ttl)
+        probe.link_obs_table.update((current_node, target), state, now)
         if state is not LinkState.UP:
             return None
 

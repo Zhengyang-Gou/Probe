@@ -59,7 +59,6 @@ class ExperimentConfig:
     inter_min_delay: float
     inter_max_delay: float
     down_probability: float
-    obs_ttl: float
     max_hop: int | None
     alpha: float
     step_time: float
@@ -222,7 +221,6 @@ def run_one_experiment(
     delay_table: DelayTable,
     actual_delay_provider: ActualDelayProvider,
     provider: StaticLinkStateProvider,
-    obs_ttl: float,
     max_hop: int,
     alpha: float,
     step_time: float,
@@ -234,7 +232,6 @@ def run_one_experiment(
         base_topology=topology,
         delay_table=delay_table,
         root=0,
-        obs_ttl=obs_ttl,
         max_hop=max_hop,
         alpha=alpha,
         cycle_route=tuple(cycle_route),
@@ -343,7 +340,6 @@ def load_config(path: Path) -> ExperimentConfig:
         inter_min_delay=float(leo_delay.get("inter_min_delay", 1.2)),
         inter_max_delay=float(leo_delay.get("inter_max_delay", 3.0)),
         down_probability=float(failure.get("down_probability", 0.18)),
-        obs_ttl=float(traversal.get("obs_ttl", 4.0)),
         max_hop=None if max_hop == 0 else max_hop,
         alpha=float(traversal.get("alpha", 0.85)),
         step_time=float(simulation.get("step_time", 1.0)),
@@ -373,8 +369,6 @@ def validate_config(config: ExperimentConfig, path: Path) -> None:
         raise ValueError(f"{path}: leo_delay.inter_max_delay must be >= inter_min_delay")
     if not 0 <= config.down_probability <= 1:
         raise ValueError(f"{path}: failure.down_probability must be in [0, 1]")
-    if config.obs_ttl <= 0:
-        raise ValueError(f"{path}: traversal.obs_ttl must be positive")
     if config.max_hop is not None and config.max_hop < 0:
         raise ValueError(f"{path}: traversal.max_hop must be non-negative")
     if not 0 < config.alpha <= 1:
@@ -439,7 +433,6 @@ def main() -> None:
             delay_table=delay_table,
             actual_delay_provider=actual_delay_provider,
             provider=provider,
-            obs_ttl=config.obs_ttl,
             max_hop=max_hop,
             alpha=config.alpha,
             step_time=config.step_time,

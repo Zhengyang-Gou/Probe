@@ -45,23 +45,11 @@ def _new_link_observation_table() -> LinkObservationTable:
 
 @dataclass(slots=True)
 class LinkObservation:
-    """A time-limited observation for one undirected edge."""
+    """An observation for one undirected edge."""
 
     edge: Edge
     state: LinkState
     observed_time: float
-    ttl: float
-
-    @property
-    def expires_at(self) -> float:
-        """Return the time at which this observation becomes stale."""
-
-        return self.observed_time + self.ttl
-
-    def is_expired(self, now: float) -> bool:
-        """Return whether the observation has expired at ``now``."""
-
-        return now >= self.expires_at
 
 
 @dataclass(slots=True)

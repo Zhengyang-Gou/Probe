@@ -1,5 +1,5 @@
 [experiment]
-runs = 200
+runs = 2000
 seed = 7
 
 [grid]
@@ -20,10 +20,9 @@ min_delay = 0.8
 max_delay = 3.0
 
 [failure]
-down_probability = 0.2
+down_probability = 0.05
 
 [traversal]
-obs_ttl = 4.0
 max_hop = 0
 alpha = 0.85
 

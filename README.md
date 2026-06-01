@@ -5,13 +5,13 @@
 ## Algorithm Assumptions
 
 - The base topology `G0=(V,E0)` is a fixed undirected graph. In this project edges are normalized as `(min(u, v), max(u, v))`.
-- Without a recent observation, every base link is treated as available by default.
+- Without an observation, every base link is treated as available by default.
 - A probe carries the next requested telemetry node, its current explicit forwarding path, collected telemetry records, and a hop limit.
 - A satellite only performs telemetry when its node ID matches the probe's `next_telemetry_node`; relay nodes forward without recording telemetry or advancing the target.
 - There is no predicted link up/down schedule. Link state knowledge comes from telemetry-node observations and failed next-hop checks.
-- `LinkObservationTable` stores recent `UP` or `DOWN` observations with a TTL. Newer observations replace older ones.
+- `LinkObservationTable` stores the latest `UP` or `DOWN` observation for each link. Newer observations replace older ones.
 - The estimated topology is `Ge(t) = G0 - recent_down_edges(t)`.
-- If a down link is later observed as up, it is reintroduced into `Ge(t)`. If an observation expires, the link returns to default available state.
+- If a down link is later observed as up, it is reintroduced into `Ge(t)`.
 - Edge weights come from the current periodic delay slot: `DelayTable[slot(t)][u][v]`.
 - Already visited nodes may be used as relay nodes, but they are excluded as new traversal targets.
 - After a telemetry node chooses its Hamiltonian successor, a healthy direct physical link to that successor is used immediately without recalculating the path.
@@ -22,7 +22,7 @@
 - `models.py`: enums, dataclasses, edge normalization, probe/result models.
 - `topology.py`: immutable undirected topology and grid topology generation.
 - `delay_table.py`: periodic per-link delay storage.
-- `observations.py`: TTL-based link observation table.
+- `observations.py`: link observation table.
 - `planner.py`: Dijkstra path planning and path utility functions.
 - `traversal.py`: adaptive traversal engine that combines observations, estimated topology, and planning.
 - `simulation.py`: lightweight physical link-state provider and simulation runner.
@@ -46,7 +46,6 @@ engine = AdaptiveTraversalEngine(
     base_topology=topology,
     delay_table=delay_table,
     root=0,
-    obs_ttl=3.0,
     max_hop=500,
     cycle_route=tuple(cycle_route),
 )
@@ -78,7 +77,6 @@ engine = AdaptiveTraversalEngine(
     topology,
     delay_table,
     root=0,
-    obs_ttl=4.0,
     max_hop=1000,
     cycle_route=tuple(cycle_route),
 )

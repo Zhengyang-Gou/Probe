@@ -28,7 +28,6 @@ def test_initial_path_uses_current_slot_delay_table() -> None:
         topology,
         table,
         root=0,
-        obs_ttl=10.0,
         max_hop=10,
         cycle_route=(0, 2, 1, 0),
     )
@@ -49,7 +48,6 @@ def test_cycle_route_selects_next_unvisited_target() -> None:
         topology,
         table,
         root=0,
-        obs_ttl=10.0,
         max_hop=10,
         cycle_route=(0, 2, 1, 0),
     )
@@ -72,7 +70,6 @@ def test_direct_successor_link_skips_path_recalculation() -> None:
         topology,
         table,
         root=0,
-        obs_ttl=10.0,
         max_hop=10,
         cycle_route=(0, 1, 2, 0),
     )
@@ -93,7 +90,6 @@ def test_down_direct_successor_link_replans_to_same_target() -> None:
         topology,
         table,
         root=0,
-        obs_ttl=10.0,
         max_hop=10,
         cycle_route=(0, 1, 2, 0),
     )
@@ -119,7 +115,6 @@ def test_relay_node_does_not_record_telemetry_or_advance_target() -> None:
         topology,
         table,
         root=0,
-        obs_ttl=10.0,
         max_hop=10,
         cycle_route=(0, 2, 1, 0),
     )
@@ -149,7 +144,6 @@ def test_next_hop_down_triggers_hard_replan() -> None:
         topology,
         table,
         root=0,
-        obs_ttl=10.0,
         max_hop=10,
         cycle_route=(0, 2, 1, 0),
     )
@@ -184,7 +178,6 @@ def test_slot_change_soft_replan_uses_new_weights_when_better() -> None:
         topology,
         table,
         root=0,
-        obs_ttl=10.0,
         max_hop=10,
         cycle_route=(0, 1, 2, 3, 0),
         alpha=0.85,
@@ -215,7 +208,6 @@ def test_soft_replan_only_switches_when_candidate_beats_alpha_threshold() -> Non
         topology,
         table,
         root=0,
-        obs_ttl=10.0,
         max_hop=10,
         cycle_route=(0, 1, 2, 3, 0),
         alpha=0.85,
@@ -240,12 +232,11 @@ def test_link_recovery_up_rejoins_estimated_topology() -> None:
     topology = Topology(nodes={0, 1}, edges={(0, 1)})
     table = DelayTable.from_constant_delay(topology, period_slots=1, delay=1.0)
     obs = LinkObservationTable()
-    obs.update((0, 1), LinkState.DOWN, observed_time=0.0, ttl=10.0)
+    obs.update((0, 1), LinkState.DOWN, observed_time=0.0)
     engine = AdaptiveTraversalEngine(
         topology,
         table,
         root=0,
-        obs_ttl=10.0,
         max_hop=10,
         cycle_route=(0, 1, 0),
     )
@@ -274,7 +265,6 @@ def test_link_recovery_detected_even_when_down_edge_count_is_unchanged() -> None
         topology,
         table,
         root=0,
-        obs_ttl=10.0,
         max_hop=10,
         cycle_route=(0, 1, 2, 3, 0),
         alpha=0.85,
@@ -289,7 +279,7 @@ def test_link_recovery_detected_even_when_down_edge_count_is_unchanged() -> None
         path_index=0,
         last_slot=0,
     )
-    probe.link_obs_table.update((0, 2), LinkState.DOWN, observed_time=0.0, ttl=10.0)
+    probe.link_obs_table.update((0, 2), LinkState.DOWN, observed_time=0.0)
 
     result = engine.on_probe_arrival(
         probe,
@@ -310,7 +300,6 @@ def test_finishes_after_all_nodes_are_visited_and_probe_returns_root() -> None:
         topology,
         table,
         root=0,
-        obs_ttl=10.0,
         max_hop=10,
         cycle_route=(0, 1, 0),
     )
@@ -338,7 +327,6 @@ def test_unvisited_node_unreachable_returns_temporarily_unreachable() -> None:
         topology,
         table,
         root=0,
-        obs_ttl=10.0,
         max_hop=10,
         cycle_route=(0, 1, 0),
     )
@@ -361,7 +349,6 @@ def test_exceeding_max_hop_returns_partial_result() -> None:
         topology,
         table,
         root=0,
-        obs_ttl=10.0,
         max_hop=0,
         cycle_route=(0, 1, 0),
     )
