@@ -108,6 +108,46 @@ python scripts/random_experiments.py \
   --max-down-duration 12
 ```
 
+## IPMininet + SRv6 + tc Experiment
+
+Run this part on a Linux host with Mininet/IPMininet and an SRv6-capable kernel:
+
+```bash
+sudo python3 scripts/ipmininet_srv6_experiment.py --rows 3 --cols 3
+```
+
+The script builds a router grid, configures one SRv6 SID per router, applies `tc netem`
+delay on router-router links, and installs an ingress SRv6 policy from `hsrc` to `hdst`.
+
+Useful options:
+
+```bash
+sudo python3 scripts/ipmininet_srv6_experiment.py \
+  --rows 3 \
+  --cols 3 \
+  --delay-ms 20 \
+  --loss-percent 0
+```
+
+Schedule link failures and policy updates:
+
+```bash
+sudo python3 scripts/ipmininet_srv6_experiment.py \
+  --rows 3 \
+  --cols 3 \
+  --algorithm-demo \
+  --event 10:1:2:down \
+  --event 20:1:2:up
+```
+
+Inside IPMininet CLI:
+
+```bash
+hsrc ping6 -c 3 2001:db8:9::2
+r0 ip -6 route
+r1 tc qdisc show
+```
+
 ## Development
 
 Install test dependencies and run the suite:
