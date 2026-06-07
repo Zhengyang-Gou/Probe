@@ -13,6 +13,13 @@ from adaptive_leo_traversal.models import (
     normalize_edge,
 )
 from adaptive_leo_traversal.observations import LinkObservationTable
+from adaptive_leo_traversal.srv6_models import (
+    SRv6ExperimentResult,
+    SRv6Policy,
+    SRv6PolicyEvent,
+    SidBehavior,
+)
+from adaptive_leo_traversal.srv6_sid import SRv6SidAllocator
 from adaptive_leo_traversal.topology import Topology, make_grid_topology
 from adaptive_leo_traversal.traversal import AdaptiveTraversalEngine
 
@@ -25,6 +32,11 @@ __all__ = [
     "NodeTelemetryRecord",
     "PathDecision",
     "ProbeState",
+    "SRv6ExperimentResult",
+    "SRv6Policy",
+    "SRv6PolicyEvent",
+    "SRv6SidAllocator",
+    "SidBehavior",
     "Topology",
     "TraversalResult",
     "TraversalStatus",

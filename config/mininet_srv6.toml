@@ -1,0 +1,19 @@
+[grid]
+rows = 4
+cols = 4
+
+[srv6]
+locator_prefix = "fc00:0"
+mode = "node"
+decap_table = "254"
+
+[emulation]
+duration = 20
+slot_seconds = 1
+default_delay_ms = 5
+enable_cli = true
+
+[failure]
+edge = [0, 1]
+start = 5
+end = 15

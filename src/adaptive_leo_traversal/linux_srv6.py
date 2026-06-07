@@ -1,128 +1,154 @@
-"""Linux SRv6 and tc command helpers for real-network experiments."""
+"""Linux SRv6 iproute2 command rendering helpers."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import shlex
+import subprocess
 
 
-def router_name(node: int) -> str:
-    """Return the IPMininet router name for an algorithm node ID."""
+def render_enable_srv6_sysctls(ifaces: list[str] | None = None) -> list[list[str]]:
+    """Return sysctl commands that enable IPv6 forwarding and SRv6 processing."""
 
-    if node < 0:
-        raise ValueError("node must be non-negative")
-    return f"r{node}"
-
-
-def sid_for_node(node: int, locator_prefix: str = "fc00") -> str:
-    """Return a deterministic SRv6 SID for an algorithm node ID."""
-
-    if node < 0:
-        raise ValueError("node must be non-negative")
-    return f"{locator_prefix}:{node + 1:x}::1"
+    commands = [
+        ["sysctl", "-w", "net.ipv6.conf.all.forwarding=1"],
+        ["sysctl", "-w", "net.ipv6.conf.all.seg6_enabled=1"],
+        ["sysctl", "-w", "net.ipv6.conf.default.seg6_enabled=1"],
+    ]
+    for iface in ifaces or []:
+        iface = _require_non_empty(iface, "iface")
+        commands.append(["sysctl", "-w", f"net.ipv6.conf.{iface}.seg6_enabled=1"])
+    return commands
 
 
-def host_prefix_for_node(node: int, prefix: str = "2001:db8") -> str:
-    """Return a deterministic /64 host prefix attached to a router node."""
+def render_node_sid_route(
+    sid: str,
+    dev: str = "lo",
+    table: str | None = None,
+) -> list[str]:
+    """Render an iproute2 seg6local End route for a Node SID."""
 
-    if node < 0:
-        raise ValueError("node must be non-negative")
-    return f"{prefix}:{node + 1:x}::/64"
-
-
-def host_addr_for_node(node: int, prefix: str = "2001:db8") -> str:
-    """Return a deterministic host address attached to a router node."""
-
-    if node < 0:
-        raise ValueError("node must be non-negative")
-    return f"{prefix}:{node + 1:x}::2"
-
-
-def path_to_sid_list(path: list[int] | tuple[int, ...], locator_prefix: str = "fc00") -> list[str]:
-    """Convert an explicit node path into an SRv6 segment list.
-
-    The ingress node is excluded because it installs the policy. The last node is kept so
-    it can execute the final endpoint behavior.
-    """
-
-    if len(path) < 2:
-        return []
-    return [sid_for_node(node, locator_prefix) for node in path[1:]]
-
-
-def build_seg6local_end_cmd(sid: str, dev: str = "lo") -> str:
-    """Build an endpoint route that consumes one SRv6 SID."""
-
-    return f"ip -6 route replace {sid}/128 encap seg6local action End dev {dev}"
+    sid_prefix = _with_default_prefixlen(_require_non_empty(sid, "sid"), 128)
+    dev = _require_non_empty(dev, "dev")
+    command = [
+        "ip",
+        "-6",
+        "route",
+        "replace",
+        sid_prefix,
+        "encap",
+        "seg6local",
+        "action",
+        "End",
+        "dev",
+        dev,
+    ]
+    if table is not None:
+        command.extend(["table", _require_non_empty(table, "table")])
+    return command
 
 
-def build_seg6local_dx6_cmd(sid: str, nh6: str, dev: str) -> str:
-    """Build a final endpoint route that decapsulates and forwards to an IPv6 next hop."""
+def render_end_dt6_sid_route(
+    sid: str,
+    lookup_table: str = "254",
+    dev: str = "lo",
+) -> list[str]:
+    """Render a seg6local End.DT6 route that decapsulates into an IPv6 table."""
 
-    return f"ip -6 route replace {sid}/128 encap seg6local action End.DX6 nh6 {nh6} dev {dev}"
+    sid_prefix = _with_default_prefixlen(_require_non_empty(sid, "sid"), 128)
+    lookup_table = _require_non_empty(lookup_table, "lookup_table")
+    dev = _require_non_empty(dev, "dev")
+    return [
+        "ip",
+        "-6",
+        "route",
+        "replace",
+        sid_prefix,
+        "encap",
+        "seg6local",
+        "action",
+        "End.DT6",
+        "table",
+        lookup_table,
+        "dev",
+        dev,
+    ]
 
 
-def build_seg6_policy_cmd(
+def render_srv6_encap_route(
     dst_prefix: str,
-    sid_list: list[str] | tuple[str, ...],
+    segments: list[str],
     dev: str,
     mode: str = "encap",
-) -> str:
-    """Build an ingress SRv6 policy route for one destination prefix."""
+    table: str | None = None,
+) -> list[str]:
+    """Render an iproute2 SRv6 encapsulation route."""
 
-    if not sid_list:
-        raise ValueError("sid_list must contain at least one SID")
-    segments = ",".join(sid_list)
-    return f"ip -6 route replace {dst_prefix} encap seg6 mode {mode} segs {segments} dev {dev}"
+    dst_prefix = _require_non_empty(dst_prefix, "dst_prefix")
+    dev = _require_non_empty(dev, "dev")
+    if mode not in {"encap", "inline"}:
+        raise ValueError("mode must be 'encap' or 'inline'")
+    if not segments:
+        raise ValueError("segments must be non-empty")
 
-
-def build_plain_ipv6_route_cmd(dst_prefix: str, nh6: str, dev: str) -> str:
-    """Build a normal IPv6 route used by hosts or non-SRv6 fallbacks."""
-
-    return f"ip -6 route replace {dst_prefix} via {nh6} dev {dev}"
-
-
-@dataclass(frozen=True, slots=True)
-class NetemConfig:
-    """tc/netem parameters for one interface."""
-
-    delay_ms: float | None = None
-    jitter_ms: float | None = None
-    loss_percent: float | None = None
-
-
-def build_tc_netem_cmd(dev: str, config: NetemConfig) -> str:
-    """Build a tc/netem replacement command."""
-
-    parts = [f"tc qdisc replace dev {dev} root netem"]
-    if config.delay_ms is not None:
-        if config.delay_ms < 0:
-            raise ValueError("delay_ms must be non-negative")
-        delay = f"delay {config.delay_ms:g}ms"
-        if config.jitter_ms is not None:
-            if config.jitter_ms < 0:
-                raise ValueError("jitter_ms must be non-negative")
-            delay = f"{delay} {config.jitter_ms:g}ms"
-        parts.append(delay)
-    elif config.jitter_ms is not None:
-        raise ValueError("jitter_ms requires delay_ms")
-
-    if config.loss_percent is not None:
-        if not 0 <= config.loss_percent <= 100:
-            raise ValueError("loss_percent must be in [0, 100]")
-        parts.append(f"loss {config.loss_percent:g}%")
-
-    if len(parts) == 1:
-        parts.append("delay 0ms")
-    return " ".join(parts)
+    cleaned_segments = [_require_non_empty(segment, "segment") for segment in segments]
+    command = [
+        "ip",
+        "-6",
+        "route",
+        "replace",
+        dst_prefix,
+        "encap",
+        "seg6",
+        "mode",
+        mode,
+        "segs",
+        ",".join(cleaned_segments),
+        "dev",
+        dev,
+    ]
+    if table is not None:
+        command.extend(["table", _require_non_empty(table, "table")])
+    return command
 
 
-def build_tc_delete_cmd(dev: str) -> str:
-    """Build a command that removes the root qdisc from an interface."""
+def render_plain_ipv6_route(dst_prefix: str, via: str | None, dev: str) -> list[str]:
+    """Render a plain IPv6 route, optionally using a next hop."""
 
-    return f"tc qdisc del dev {dev} root"
+    dst_prefix = _require_non_empty(dst_prefix, "dst_prefix")
+    dev = _require_non_empty(dev, "dev")
+    command = ["ip", "-6", "route", "replace", dst_prefix]
+    if via is not None:
+        command.extend(["via", _require_non_empty(via, "via")])
+    command.extend(["dev", dev])
+    return command
 
 
-def build_tc_tbf_cmd(dev: str, rate: str, burst: str = "32kbit", latency: str = "400ms") -> str:
-    """Build a tc/tbf bandwidth limiter command."""
+def run_cmd(argv: list[str], check: bool = True) -> subprocess.CompletedProcess[str]:
+    """Run a command safely and capture stdout/stderr."""
 
-    return f"tc qdisc replace dev {dev} root tbf rate {rate} burst {burst} latency {latency}"
+    if not argv:
+        raise ValueError("argv must be non-empty")
+
+    result = subprocess.run(argv, check=False, capture_output=True, text=True)
+    if check and result.returncode != 0:
+        command = shlex.join(argv)
+        raise RuntimeError(
+            "command failed\n"
+            f"command: {command}\n"
+            f"returncode: {result.returncode}\n"
+            f"stdout:\n{result.stdout}\n"
+            f"stderr:\n{result.stderr}"
+        )
+    return result
+
+
+def _with_default_prefixlen(value: str, prefixlen: int) -> str:
+    if "/" in value:
+        return value
+    return f"{value}/{prefixlen}"
+
+
+def _require_non_empty(value: str, name: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{name} must be non-empty")
+    return value.strip()

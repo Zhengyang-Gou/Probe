@@ -20,7 +20,7 @@ min_delay = 0.8
 max_delay = 3.0
 
 [failure]
-down_probability = 0.05
+down_probability = 0.1
 
 [traversal]
 max_hop = 0
@@ -28,3 +28,9 @@ alpha = 0.85
 
 [simulation]
 step_time = 1.0
+
+[srv6]
+enabled = true
+locator_prefix = "fc00:0"
+base_srh_overhead_bytes = 8
+per_sid_overhead_bytes = 16

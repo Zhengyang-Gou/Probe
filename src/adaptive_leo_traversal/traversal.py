@@ -78,7 +78,7 @@ class AdaptiveTraversalEngine:
             probe.hop_limit = self.max_hop
         slot = self.delay_table.slot_at(now)
         previous_slot = probe.last_slot
-        old_down_edges = probe.link_obs_table.recent_down_edges(now)
+        old_down_edges = probe.link_obs_table.down_edges()
 
         if self._all_nodes_visited(probe) and current_node == self.root:
             probe.last_slot = slot
@@ -92,7 +92,7 @@ class AdaptiveTraversalEngine:
         else:
             self._record_failed_next_hop(probe, current_node, now, physical_link_state_provider)
 
-        recent_down_edges = probe.link_obs_table.recent_down_edges(now)
+        recent_down_edges = probe.link_obs_table.down_edges()
         estimated_topology = self.base_topology.without_edges(recent_down_edges)
 
         if self._all_nodes_visited(probe) and current_node == self.root:
@@ -178,7 +178,7 @@ class AdaptiveTraversalEngine:
         for neighbor in self.base_topology.neighbors(current_node):
             state = provider(current_node, neighbor, now)
             probe.link_obs_table.update((current_node, neighbor), state, now)
-            observation = probe.link_obs_table.get_observation((current_node, neighbor), now)
+            observation = probe.link_obs_table.current_observation((current_node, neighbor))
             if observation is not None:
                 observations.append(observation)
         return observations

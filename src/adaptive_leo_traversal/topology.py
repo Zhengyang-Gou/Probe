@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from adaptive_leo_traversal.models import Edge, normalize_edge
 
@@ -13,6 +13,7 @@ class Topology:
 
     nodes: set[int]
     edges: set[Edge]
+    _adjacency: dict[int, frozenset[int]] = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         normalized_nodes = set(self.nodes)
@@ -20,21 +21,24 @@ class Topology:
         for u, v in normalized_edges:
             if u not in normalized_nodes or v not in normalized_nodes:
                 raise ValueError(f"edge {(u, v)} references a node outside the topology")
+        adjacency: dict[int, set[int]] = {node: set() for node in normalized_nodes}
+        for u, v in normalized_edges:
+            adjacency[u].add(v)
+            adjacency[v].add(u)
         object.__setattr__(self, "nodes", normalized_nodes)
         object.__setattr__(self, "edges", normalized_edges)
+        object.__setattr__(
+            self,
+            "_adjacency",
+            {node: frozenset(neighbors) for node, neighbors in adjacency.items()},
+        )
 
     def neighbors(self, node: int) -> set[int]:
         """Return all adjacent nodes in the undirected graph."""
 
         if node not in self.nodes:
             raise KeyError(f"unknown node: {node}")
-        adjacent: set[int] = set()
-        for u, v in self.edges:
-            if u == node:
-                adjacent.add(v)
-            elif v == node:
-                adjacent.add(u)
-        return adjacent
+        return set(self._adjacency[node])
 
     def has_edge(self, u: int, v: int) -> bool:
         """Return whether the undirected edge exists."""

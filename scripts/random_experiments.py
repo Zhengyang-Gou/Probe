@@ -15,11 +15,15 @@ from statistics import mean
 from adaptive_leo_traversal import (
     AdaptiveTraversalEngine,
     DelayTable,
+    SRv6ExperimentResult,
+    SRv6PolicyEvent,
+    SRv6SidAllocator,
     TraversalStatus,
     make_grid_hamiltonian_cycle,
     make_grid_topology,
 )
 from adaptive_leo_traversal.simulation import StaticLinkStateProvider
+from adaptive_leo_traversal.srv6_simulation import SRv6SimulationRunner
 from adaptive_leo_traversal.topology import Topology
 
 ActualDelayProvider = Callable[[int, int, float], float]
@@ -62,6 +66,10 @@ class ExperimentConfig:
     max_hop: int | None
     alpha: float
     step_time: float
+    srv6_enabled: bool
+    srv6_locator_prefix: str
+    srv6_base_srh_overhead_bytes: int
+    srv6_per_sid_overhead_bytes: int
 
 
 def build_random_delay_table(
@@ -268,7 +276,43 @@ def run_one_experiment(
     )
 
 
-def summarize(results: list[ExperimentResult]) -> str:
+def run_one_srv6_experiment(
+    run_id: int,
+    topology: Topology,
+    delay_table: DelayTable,
+    actual_delay_provider: ActualDelayProvider,
+    provider: StaticLinkStateProvider,
+    max_hop: int,
+    alpha: float,
+    step_time: float,
+    cycle_route: list[int],
+    sid_allocator: SRv6SidAllocator,
+    base_srh_overhead_bytes: int = 8,
+    per_sid_overhead_bytes: int = 16,
+) -> tuple[SRv6ExperimentResult, list[SRv6PolicyEvent]]:
+    """Run one simulation while recording SRv6 policy metrics."""
+
+    engine = AdaptiveTraversalEngine(
+        base_topology=topology,
+        delay_table=delay_table,
+        root=0,
+        max_hop=max_hop,
+        alpha=alpha,
+        cycle_route=tuple(cycle_route),
+    )
+    runner = SRv6SimulationRunner(
+        engine=engine,
+        provider=provider,
+        actual_delay_provider=actual_delay_provider,
+        sid_allocator=sid_allocator,
+        step_time=step_time,
+        base_srh_overhead_bytes=base_srh_overhead_bytes,
+        per_sid_overhead_bytes=per_sid_overhead_bytes,
+    )
+    return runner.run(run_id=run_id)
+
+
+def summarize(results: list[ExperimentResult | SRv6ExperimentResult]) -> str:
     """Format aggregate statistics."""
 
     finished = [result for result in results if result.status is TraversalStatus.FINISHED]
@@ -294,8 +338,54 @@ def summarize(results: list[ExperimentResult]) -> str:
             f"mean_finish_time: {successful_mean(lambda result: result.finish_time)}",
             f"mean_visited: {successful_mean(lambda result: result.visited_count, precision=4)}",
             f"min_visited: {min(result.visited_count for result in results)}",
-            f"mean_active_down_edges: {successful_mean(lambda result: result.mean_active_down_edges)}",
-            f"mean_max_active_down_edges: {successful_mean(lambda result: result.max_active_down_edges)}",
+            (
+                "mean_active_down_edges: "
+                f"{successful_mean(lambda result: result.mean_active_down_edges)}"
+            ),
+            (
+                "mean_max_active_down_edges: "
+                f"{successful_mean(lambda result: result.max_active_down_edges)}"
+            ),
+        ]
+    )
+
+
+def summarize_srv6(results: list[SRv6ExperimentResult]) -> str:
+    """Format aggregate statistics for SRv6-aware runs."""
+
+    finished = [result for result in results if result.status is TraversalStatus.FINISHED]
+
+    def successful_mean(values: Callable[[SRv6ExperimentResult], float], precision: int = 2) -> str:
+        if not finished:
+            return "n/a"
+        return f"{mean(values(result) for result in finished):.{precision}f}"
+
+    return "\n".join(
+        [
+            summarize(results),
+            "",
+            "SRv6 Summary",
+            "------------",
+            (
+                "mean_srv6_policy_updates: "
+                f"{successful_mean(lambda result: result.srv6_policy_updates)}"
+            ),
+            (
+                "mean_segment_list_length: "
+                f"{successful_mean(lambda result: result.mean_segment_list_length)}"
+            ),
+            (
+                "mean_max_segment_list_length: "
+                f"{successful_mean(lambda result: result.max_segment_list_length)}"
+            ),
+            (
+                "mean_srh_overhead_bytes: "
+                f"{successful_mean(lambda result: result.mean_srh_overhead_bytes)}"
+            ),
+            (
+                "mean_total_sid_processing_count: "
+                f"{successful_mean(lambda result: result.total_sid_processing_count)}"
+            ),
         ]
     )
 
@@ -325,6 +415,7 @@ def load_config(path: Path) -> ExperimentConfig:
     failure = raw.get("failure", {})
     traversal = raw.get("traversal", {})
     simulation = raw.get("simulation", {})
+    srv6 = raw.get("srv6", {})
 
     max_hop = int(traversal.get("max_hop", 0))
     config = ExperimentConfig(
@@ -343,6 +434,10 @@ def load_config(path: Path) -> ExperimentConfig:
         max_hop=None if max_hop == 0 else max_hop,
         alpha=float(traversal.get("alpha", 0.85)),
         step_time=float(simulation.get("step_time", 1.0)),
+        srv6_enabled=bool(srv6.get("enabled", False)),
+        srv6_locator_prefix=str(srv6.get("locator_prefix", "fc00:0")),
+        srv6_base_srh_overhead_bytes=int(srv6.get("base_srh_overhead_bytes", 8)),
+        srv6_per_sid_overhead_bytes=int(srv6.get("per_sid_overhead_bytes", 16)),
     )
     validate_config(config, path)
     return config
@@ -375,6 +470,12 @@ def validate_config(config: ExperimentConfig, path: Path) -> None:
         raise ValueError(f"{path}: traversal.alpha must be in (0, 1]")
     if config.step_time <= 0:
         raise ValueError(f"{path}: simulation.step_time must be positive")
+    if not config.srv6_locator_prefix:
+        raise ValueError(f"{path}: srv6.locator_prefix must be non-empty")
+    if config.srv6_base_srh_overhead_bytes < 0:
+        raise ValueError(f"{path}: srv6.base_srh_overhead_bytes must be non-negative")
+    if config.srv6_per_sid_overhead_bytes < 0:
+        raise ValueError(f"{path}: srv6.per_sid_overhead_bytes must be non-negative")
 
 
 def main() -> None:
@@ -386,12 +487,23 @@ def main() -> None:
     cycle_route = make_grid_hamiltonian_cycle(config.rows, config.cols)
     node_width = max(2, len(str(len(topology.nodes))))
     results: list[ExperimentResult] = []
+    srv6_results: list[SRv6ExperimentResult] = []
+    sid_allocator = SRv6SidAllocator(config.srv6_locator_prefix)
 
     print(f"config: {args.config}", flush=True)
-    print(
-        "run status                  visited   hops actual_delay down_edges active_down_mean active_down_max",
-        flush=True,
-    )
+    if config.srv6_enabled:
+        print(
+            "run status                  visited   hops actual_delay down_edges "
+            "active_down_mean active_down_max srv6_updates mean_sid_len max_sid_len "
+            "mean_srh_bytes max_srh_bytes",
+            flush=True,
+        )
+    else:
+        print(
+            "run status                  visited   hops actual_delay down_edges "
+            "active_down_mean active_down_max",
+            flush=True,
+        )
     for run_id in range(1, config.runs + 1):
         run_seed = rng.randrange(2**32)
         run_rng = random.Random(run_seed)
@@ -427,31 +539,64 @@ def main() -> None:
             rng=run_rng,
             down_probability=config.down_probability,
         )
-        result = run_one_experiment(
-            run_id=run_id,
-            topology=topology,
-            delay_table=delay_table,
-            actual_delay_provider=actual_delay_provider,
-            provider=provider,
-            max_hop=max_hop,
-            alpha=config.alpha,
-            step_time=config.step_time,
-            cycle_route=cycle_route,
-        )
-        results.append(result)
-        print(
-            f"{result.run_id:>3} "
-            f"{result.status.value:<23} "
-            f"{result.visited_count:>{node_width}}/{result.total_nodes:<{node_width}} "
-            f"{result.hop_count:>4} "
-            f"{result.total_delay:>12.2f} "
-            f"{result.down_edges:>10} "
-            f"{result.mean_active_down_edges:>16.2f} "
-            f"{result.max_active_down_edges:>15}",
-            flush=True,
-        )
+        if config.srv6_enabled:
+            result, _policy_events = run_one_srv6_experiment(
+                run_id=run_id,
+                topology=topology,
+                delay_table=delay_table,
+                actual_delay_provider=actual_delay_provider,
+                provider=provider,
+                max_hop=max_hop,
+                alpha=config.alpha,
+                step_time=config.step_time,
+                cycle_route=cycle_route,
+                sid_allocator=sid_allocator,
+                base_srh_overhead_bytes=config.srv6_base_srh_overhead_bytes,
+                per_sid_overhead_bytes=config.srv6_per_sid_overhead_bytes,
+            )
+            srv6_results.append(result)
+            print(
+                f"{result.run_id:>3} "
+                f"{result.status.value:<23} "
+                f"{result.visited_count:>{node_width}}/{result.total_nodes:<{node_width}} "
+                f"{result.hop_count:>4} "
+                f"{result.total_delay:>12.2f} "
+                f"{result.down_edges:>10} "
+                f"{result.mean_active_down_edges:>16.2f} "
+                f"{result.max_active_down_edges:>15} "
+                f"{result.srv6_policy_updates:>12} "
+                f"{result.mean_segment_list_length:>12.2f} "
+                f"{result.max_segment_list_length:>11} "
+                f"{result.mean_srh_overhead_bytes:>14.2f} "
+                f"{result.max_srh_overhead_bytes:>13}",
+                flush=True,
+            )
+        else:
+            result = run_one_experiment(
+                run_id=run_id,
+                topology=topology,
+                delay_table=delay_table,
+                actual_delay_provider=actual_delay_provider,
+                provider=provider,
+                max_hop=max_hop,
+                alpha=config.alpha,
+                step_time=config.step_time,
+                cycle_route=cycle_route,
+            )
+            results.append(result)
+            print(
+                f"{result.run_id:>3} "
+                f"{result.status.value:<23} "
+                f"{result.visited_count:>{node_width}}/{result.total_nodes:<{node_width}} "
+                f"{result.hop_count:>4} "
+                f"{result.total_delay:>12.2f} "
+                f"{result.down_edges:>10} "
+                f"{result.mean_active_down_edges:>16.2f} "
+                f"{result.max_active_down_edges:>15}",
+                flush=True,
+            )
 
-    print(summarize(results))
+    print(summarize_srv6(srv6_results) if config.srv6_enabled else summarize(results))
 
 
 if __name__ == "__main__":

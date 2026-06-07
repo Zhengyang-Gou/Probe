@@ -93,59 +93,15 @@ print(result.status, len(result.probe.visited))
 Run multiple randomized link-failure scenarios and report final status, visited nodes, hop count, accumulated delay, and aggregate means:
 
 ```bash
-python scripts/random_experiments.py --runs 20 --seed 7
+python scripts/random_experiments.py
 ```
 
-Example options:
+The script reads settings from `config/random_experiments.toml` by default. Edit that file to change the number of runs, grid size, delay model, failure probability, traversal parameters, and simulation step time.
+
+Use a custom TOML file with:
 
 ```bash
-python scripts/random_experiments.py \
-  --rows 6 \
-  --cols 6 \
-  --runs 50 \
-  --down-probability 0.25 \
-  --min-down-duration 2 \
-  --max-down-duration 12
-```
-
-## IPMininet + SRv6 + tc Experiment
-
-Run this part on a Linux host with Mininet/IPMininet and an SRv6-capable kernel:
-
-```bash
-sudo python3 scripts/ipmininet_srv6_experiment.py --rows 3 --cols 3
-```
-
-The script builds a router grid, configures one SRv6 SID per router, applies `tc netem`
-delay on router-router links, and installs an ingress SRv6 policy from `hsrc` to `hdst`.
-
-Useful options:
-
-```bash
-sudo python3 scripts/ipmininet_srv6_experiment.py \
-  --rows 3 \
-  --cols 3 \
-  --delay-ms 20 \
-  --loss-percent 0
-```
-
-Schedule link failures and policy updates:
-
-```bash
-sudo python3 scripts/ipmininet_srv6_experiment.py \
-  --rows 3 \
-  --cols 3 \
-  --algorithm-demo \
-  --event 10:1:2:down \
-  --event 20:1:2:up
-```
-
-Inside IPMininet CLI:
-
-```bash
-hsrc ping6 -c 3 2001:db8:9::2
-r0 ip -6 route
-r1 tc qdisc show
+python scripts/random_experiments.py --config config/random_experiments.toml
 ```
 
 ## Development
@@ -158,3 +114,20 @@ pytest
 ```
 
 The package intentionally has no runtime dependencies beyond the Python standard library.
+
+## Level 2 Mininet SRv6 Emulation
+
+The Linux/Mininet/tc emulation layer is documented in
+[docs/mininet_srv6.md](docs/mininet_srv6.md). Start with:
+
+```bash
+python -m emulation.env_check
+sudo python -m emulation.mininet_srv6_lab --config config/mininet_srv6.toml --no-cli
+```
+
+When checking connectivity from the Mininet CLI, prefer a service-loopback
+source address so replies have a routed return path:
+
+```bash
+r0 ping -6 -I 2001:db8:100:0::1 -c 3 2001:db8:100:f::1
+```

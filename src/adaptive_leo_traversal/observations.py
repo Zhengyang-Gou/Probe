@@ -23,8 +23,8 @@ class LinkObservationTable:
             observed_time=observed_time,
         )
 
-    def recent_down_edges(self, now: float) -> set[Edge]:
-        """Return all edges currently observed as down."""
+    def down_edges(self) -> set[Edge]:
+        """Return all edges whose latest observation is down."""
 
         return {
             edge
@@ -32,14 +32,29 @@ class LinkObservationTable:
             if observation.state is LinkState.DOWN
         }
 
-    def get_state(self, edge: Edge, now: float) -> LinkState | None:
-        """Return the current observation state, or ``None`` when default applies."""
+    def recent_down_edges(self, now: float) -> set[Edge]:
+        """Return all edges whose latest observation is down."""
+
+        return self.down_edges()
+
+    def current_state(self, edge: Edge) -> LinkState | None:
+        """Return the latest observation state, or ``None`` when default applies."""
 
         normalized = normalize_edge(*edge)
         observation = self._observations.get(normalized)
         return None if observation is None else observation.state
 
-    def get_observation(self, edge: Edge, now: float) -> LinkObservation | None:
-        """Return the current observation, or ``None`` when default applies."""
+    def get_state(self, edge: Edge, now: float) -> LinkState | None:
+        """Return the latest observation state, or ``None`` when default applies."""
+
+        return self.current_state(edge)
+
+    def current_observation(self, edge: Edge) -> LinkObservation | None:
+        """Return the latest observation, or ``None`` when default applies."""
 
         return self._observations.get(normalize_edge(*edge))
+
+    def get_observation(self, edge: Edge, now: float) -> LinkObservation | None:
+        """Return the latest observation, or ``None`` when default applies."""
+
+        return self.current_observation(edge)

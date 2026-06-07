@@ -28,3 +28,12 @@ def test_topology_without_edges_removes_recent_down_edges() -> None:
 
     assert not estimated.has_edge(0, 1)
     assert estimated.has_edge(1, 2)
+
+
+def test_neighbors_returns_copy_of_cached_adjacency() -> None:
+    topology = Topology(nodes={0, 1, 2}, edges={(0, 1), (0, 2)})
+
+    neighbors = topology.neighbors(0)
+    neighbors.clear()
+
+    assert topology.neighbors(0) == {1, 2}
