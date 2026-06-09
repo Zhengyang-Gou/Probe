@@ -37,6 +37,20 @@ def main(argv: list[str] | None = None) -> int:
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.bind(("::", args.port))
     with args.log.open("a", encoding="utf-8") as log_file:
+        log_file.write(
+            json.dumps(
+                {
+                    "time": time.time(),
+                    "node": args.node_id,
+                    "port": args.port,
+                    "neighbors": neighbors,
+                    "status": "started",
+                },
+                sort_keys=True,
+            )
+            + "\n"
+        )
+        log_file.flush()
         while True:
             data, address = sock.recvfrom(65535)
             received_at = time.time()

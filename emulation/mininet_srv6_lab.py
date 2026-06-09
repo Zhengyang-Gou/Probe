@@ -18,6 +18,7 @@ from typing import Any, TextIO
 _PROJECT_SRC = Path(__file__).resolve().parents[1] / "src"
 if _PROJECT_SRC.exists() and str(_PROJECT_SRC) not in sys.path:
     sys.path.insert(0, str(_PROJECT_SRC))
+_PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 from adaptive_leo_traversal.constellation import (
     ConstellationConfig,
@@ -819,11 +820,11 @@ def _start_node_agents(
     procs: list[subprocess.Popen[str]] = []
     for node in sorted(state.topology.nodes):
         neighbors = ",".join(str(neighbor) for neighbor in sorted(state.topology.neighbors(node)))
-        log_path = run_dir / f"agent_r{node}.jsonl"
+        log_path = (run_dir / f"agent_r{node}.jsonl").resolve()
+        stderr_path = (run_dir / f"agent_r{node}.stderr.log").resolve()
         argv = [
             "python3",
-            "-m",
-            "emulation.node_agent",
+            str((_PROJECT_ROOT / "emulation" / "node_agent.py").resolve()),
             "--node-id",
             str(node),
             "--port",
@@ -834,8 +835,19 @@ def _start_node_agents(
             str(log_path),
         ]
         runner.write(f"starting agent r{node}: {shlex.join(argv)}")
-        procs.append(hosts[node].popen(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+        with stderr_path.open("ab") as stderr_file:
+            procs.append(hosts[node].popen(argv, stdout=stderr_file, stderr=stderr_file))
     time.sleep(0.2)
+    for node, proc in zip(sorted(state.topology.nodes), procs, strict=True):
+        returncode = proc.poll()
+        if returncode is None:
+            continue
+        stderr_path = (run_dir / f"agent_r{node}.stderr.log").resolve()
+        diagnostics = _read_short_text(stderr_path)
+        runner.write(f"agent r{node} exited during startup with code {returncode}")
+        if diagnostics:
+            runner.write(f"agent r{node} diagnostics: {diagnostics}")
+        raise RuntimeError(f"agent r{node} failed to start; see {stderr_path}")
     return procs
 
 
@@ -1044,6 +1056,7 @@ def _render_node_setup_commands(
     node: int,
 ) -> list[list[str]]:
     ifaces = [edge_iface_name(node, neighbor) for neighbor in sorted(state.topology.neighbors(node))]
+    sid_dev = ifaces[0] if ifaces else "lo"
     commands = [["ip", "link", "set", "lo", "up"]]
     commands.extend(render_enable_srv6_sysctls(ifaces))
     commands.append(["ip", "-6", "route", "del", "default"])
@@ -1052,11 +1065,12 @@ def _render_node_setup_commands(
         commands.append(["ip", "link", "set", iface, "up"])
         commands.append(["ip", "-6", "addr", "add", _link_addr(config, state, node, neighbor), "dev", iface])
     commands.append(["ip", "-6", "addr", "add", _service_addr(config, node), "dev", "lo"])
-    commands.append(render_node_sid_route(state.allocator.node_sid(node)))
+    commands.append(render_node_sid_route(state.allocator.node_sid(node), dev=sid_dev))
     commands.append(
         render_end_dt6_sid_route(
             state.allocator.decap_sid(node),
             lookup_table=config.decap_table,
+            dev=sid_dev,
         )
     )
     return commands
@@ -1151,10 +1165,12 @@ def _render_policy_for_path(
     segments = [state.allocator.node_sid(node) for node in path[1:-1]]
     segments.append(state.allocator.decap_sid(target))
     first_hop_dev = edge_iface_name(path[0], path[1])
+    first_hop_via = _link_addr(config, state, path[1], path[0], with_prefix=False)
     command = render_srv6_encap_route(
         dst_prefix=_service_addr(config, target),
         segments=segments,
         dev=first_hop_dev,
+        via=first_hop_via,
     )
     return PolicyRender(
         source=source,
@@ -1329,12 +1345,12 @@ def _run_probe_packet_validation(
     policy: PolicyRender,
 ) -> None:
     target_addr = _service_addr(config, policy.target, with_prefix=False)
+    source_addr = _service_addr(config, policy.source, with_prefix=False)
     _, _, returncode = runner.pexec(
         hosts[policy.source],
         [
             "python3",
-            "-m",
-            "emulation.probe_client",
+            str((_PROJECT_ROOT / "emulation" / "probe_client.py").resolve()),
             "--run-id",
             "mininet",
             "--sequence",
@@ -1345,6 +1361,8 @@ def _run_probe_packet_validation(
             str(policy.source),
             "--target-node",
             str(policy.target),
+            "--src",
+            source_addr,
             "--dst",
             target_addr,
             "--port",
@@ -1379,8 +1397,7 @@ def _print_validation_commands(
             f"r{policy.source}",
             [
                 "python3",
-                "-m",
-                "emulation.probe_client",
+                str((_PROJECT_ROOT / "emulation" / "probe_client.py").resolve()),
                 "--run-id",
                 "dry-run",
                 "--sequence",
@@ -1391,6 +1408,8 @@ def _print_validation_commands(
                 str(policy.source),
                 "--target-node",
                 str(policy.target),
+                "--src",
+                source_addr,
                 "--dst",
                 target_addr,
                 "--port",
@@ -1469,6 +1488,15 @@ def _write_jsonl(handle: TextIO, payload: dict[str, Any]) -> None:
 
 def _write_json_file(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _read_short_text(path: Path, limit: int = 2000) -> str:
+    if not path.exists():
+        return ""
+    text = path.read_text(encoding="utf-8", errors="replace").strip()
+    if len(text) <= limit:
+        return text
+    return text[-limit:]
 
 
 def _config_payload(config: MininetSrv6Config) -> dict[str, Any]:

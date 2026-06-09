@@ -11,12 +11,19 @@ def render_enable_srv6_sysctls(ifaces: list[str] | None = None) -> list[list[str
 
     commands = [
         ["sysctl", "-w", "net.ipv6.conf.all.forwarding=1"],
+        ["sysctl", "-w", "net.ipv6.conf.default.forwarding=1"],
         ["sysctl", "-w", "net.ipv6.conf.all.seg6_enabled=1"],
         ["sysctl", "-w", "net.ipv6.conf.default.seg6_enabled=1"],
+        ["sysctl", "-w", "net.ipv6.conf.lo.seg6_enabled=1"],
+        ["sysctl", "-w", "net.ipv6.conf.all.seg6_require_hmac=0"],
+        ["sysctl", "-w", "net.ipv6.conf.default.seg6_require_hmac=0"],
+        ["sysctl", "-w", "net.ipv6.conf.lo.seg6_require_hmac=0"],
     ]
     for iface in ifaces or []:
         iface = _require_non_empty(iface, "iface")
+        commands.append(["sysctl", "-w", f"net.ipv6.conf.{iface}.forwarding=1"])
         commands.append(["sysctl", "-w", f"net.ipv6.conf.{iface}.seg6_enabled=1"])
+        commands.append(["sysctl", "-w", f"net.ipv6.conf.{iface}.seg6_require_hmac=0"])
     return commands
 
 
@@ -78,6 +85,7 @@ def render_srv6_encap_route(
     dst_prefix: str,
     segments: list[str],
     dev: str,
+    via: str | None = None,
     mode: str = "encap",
     table: str | None = None,
 ) -> list[str]:
@@ -103,9 +111,10 @@ def render_srv6_encap_route(
         mode,
         "segs",
         ",".join(cleaned_segments),
-        "dev",
-        dev,
     ]
+    if via is not None:
+        command.extend(["via", _require_non_empty(via, "via")])
+    command.extend(["dev", dev])
     if table is not None:
         command.extend(["table", _require_non_empty(table, "table")])
     return command

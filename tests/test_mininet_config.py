@@ -148,7 +148,7 @@ def test_each_node_has_transit_and_decap_sid_routes() -> None:
         "action",
         "End",
         "dev",
-        "lo",
+        "r1-r0",
     ] in commands
     assert [
         "ip",
@@ -163,7 +163,7 @@ def test_each_node_has_transit_and_decap_sid_routes() -> None:
         "table",
         "254",
         "dev",
-        "lo",
+        "r1-r0",
     ] in commands
 
 
@@ -203,6 +203,8 @@ def test_render_policy_for_path_uses_decap_sid_as_final_segment() -> None:
         "encap",
         "segs",
         "fc00:0:1::1,fc00:d:3::1",
+        "via",
+        "2001:db8:e:1::2",
         "dev",
         "r0-r1",
     ]
@@ -309,5 +311,5 @@ def test_adaptive_dry_run_prints_hamiltonian_policy(capsys) -> None:
     assert "# hamiltonian cycle: [0, 2, 3, 1, 0]" in output
     assert (
         "r0$ ip -6 route replace 2001:db8:100:2::1/128 "
-        "encap seg6 mode encap segs fc00:d:2::1 dev r0-r2"
+        "encap seg6 mode encap segs fc00:d:2::1 via 2001:db8:e:2::3 dev r0-r2"
     ) in output

@@ -67,6 +67,33 @@ def test_render_srv6_encap_route_renders_segments_csv() -> None:
     ]
 
 
+def test_render_srv6_encap_route_can_pin_underlay_next_hop() -> None:
+    command = render_srv6_encap_route(
+        dst_prefix="2001:db8:100:f::1/128",
+        segments=["fc00:0:4::1", "fc00:0:8::1"],
+        dev="r0-r4",
+        via="2001:db8:e:2::5",
+    )
+
+    assert command == [
+        "ip",
+        "-6",
+        "route",
+        "replace",
+        "2001:db8:100:f::1/128",
+        "encap",
+        "seg6",
+        "mode",
+        "encap",
+        "segs",
+        "fc00:0:4::1,fc00:0:8::1",
+        "via",
+        "2001:db8:e:2::5",
+        "dev",
+        "r0-r4",
+    ]
+
+
 def test_render_srv6_encap_route_rejects_empty_segments() -> None:
     with pytest.raises(ValueError):
         render_srv6_encap_route(
@@ -79,9 +106,16 @@ def test_render_srv6_encap_route_rejects_empty_segments() -> None:
 def test_render_enable_srv6_sysctls_includes_interfaces() -> None:
     assert render_enable_srv6_sysctls(["r0-r1"]) == [
         ["sysctl", "-w", "net.ipv6.conf.all.forwarding=1"],
+        ["sysctl", "-w", "net.ipv6.conf.default.forwarding=1"],
         ["sysctl", "-w", "net.ipv6.conf.all.seg6_enabled=1"],
         ["sysctl", "-w", "net.ipv6.conf.default.seg6_enabled=1"],
+        ["sysctl", "-w", "net.ipv6.conf.lo.seg6_enabled=1"],
+        ["sysctl", "-w", "net.ipv6.conf.all.seg6_require_hmac=0"],
+        ["sysctl", "-w", "net.ipv6.conf.default.seg6_require_hmac=0"],
+        ["sysctl", "-w", "net.ipv6.conf.lo.seg6_require_hmac=0"],
+        ["sysctl", "-w", "net.ipv6.conf.r0-r1.forwarding=1"],
         ["sysctl", "-w", "net.ipv6.conf.r0-r1.seg6_enabled=1"],
+        ["sysctl", "-w", "net.ipv6.conf.r0-r1.seg6_require_hmac=0"],
     ]
 
 

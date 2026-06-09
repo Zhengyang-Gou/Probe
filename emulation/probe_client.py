@@ -22,6 +22,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--root", type=int, required=True)
     parser.add_argument("--source-node", type=int, required=True)
     parser.add_argument("--target-node", type=int, required=True)
+    parser.add_argument("--src", type=str, default="")
     parser.add_argument("--dst", type=str, required=True)
     parser.add_argument("--port", type=int, default=5005)
     parser.add_argument("--path", type=str, default="")
@@ -48,6 +49,8 @@ def main(argv: list[str] | None = None) -> int:
 
     sock = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
     sock.settimeout(args.timeout)
+    if args.src:
+        sock.bind((args.src, 0))
     sock.sendto(packet.to_bytes(), (args.dst, args.port))
     try:
         data, _ = sock.recvfrom(65535)
