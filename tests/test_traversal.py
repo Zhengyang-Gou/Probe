@@ -255,6 +255,35 @@ def test_link_recovery_up_rejoins_estimated_topology() -> None:
     assert result.next_hop == 1
 
 
+def test_stale_down_observation_expires_before_replan() -> None:
+    topology = Topology(nodes={0, 1}, edges={(0, 1)})
+    table = DelayTable.from_constant_delay(topology, period_slots=1, delay=1.0)
+    obs = LinkObservationTable()
+    obs.update((0, 1), LinkState.DOWN, observed_time=0.0)
+    engine = AdaptiveTraversalEngine(
+        topology,
+        table,
+        root=0,
+        max_hop=10,
+        cycle_route=(0, 1, 0),
+        observation_ttl=1.0,
+    )
+    probe = ProbeState(
+        root=0,
+        current_node=0,
+        next_telemetry_node=1,
+        visited={0},
+        link_obs_table=obs,
+        last_slot=0,
+    )
+
+    result = engine.on_probe_arrival(probe, 0, now=2.0, physical_link_state_provider=up_provider)
+
+    assert probe.link_obs_table.recent_down_edges(2.0) == set()
+    assert result.status is TraversalStatus.RUNNING
+    assert result.next_hop == 1
+
+
 def test_link_recovery_detected_even_when_down_edge_count_is_unchanged() -> None:
     topology = Topology(nodes={0, 1, 2, 3}, edges={(0, 1), (0, 2), (1, 2), (0, 3)})
     table = DelayTable.from_constant_delay(topology, period_slots=1, delay=1.0)

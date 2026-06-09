@@ -10,6 +10,8 @@
 - A satellite only performs telemetry when its node ID matches the probe's `next_telemetry_node`; relay nodes forward without recording telemetry or advancing the target.
 - There is no predicted link up/down schedule. Link state knowledge comes from telemetry-node observations and failed next-hop checks.
 - `LinkObservationTable` stores the latest `UP` or `DOWN` observation for each link. Newer observations replace older ones.
+- By default observations do not expire. Experiments can set an observation TTL
+  so stale `DOWN` observations are reintroduced as unknown/default-up links.
 - The estimated topology is `Ge(t) = G0 - recent_down_edges(t)`.
 - If a down link is later observed as up, it is reintroduced into `Ge(t)`.
 - Edge weights come from the current periodic delay slot: `DelayTable[slot(t)][u][v]`.
@@ -21,9 +23,12 @@
 
 - `models.py`: enums, dataclasses, edge normalization, probe/result models.
 - `topology.py`: immutable undirected topology and grid topology generation.
+- `constellation.py`: configurable Walker-like constellation topology, dynamic
+  seam failures, and propagation-delay tables.
 - `delay_table.py`: periodic per-link delay storage.
 - `observations.py`: link observation table.
 - `planner.py`: Dijkstra path planning and path utility functions.
+- `probe_packet.py`: JSON payload carried by UDP probe packets in Mininet.
 - `traversal.py`: adaptive traversal engine that combines observations, estimated topology, and planning.
 - `simulation.py`: lightweight physical link-state provider and simulation runner.
 
@@ -93,15 +98,28 @@ print(result.status, len(result.probe.visited))
 Run multiple randomized link-failure scenarios and report final status, visited nodes, hop count, accumulated delay, and aggregate means:
 
 ```bash
-python scripts/random_experiments.py
+python3 scripts/random_experiments.py
 ```
 
-The script reads settings from `config/random_experiments.toml` by default. Edit that file to change the number of runs, grid size, delay model, failure probability, traversal parameters, and simulation step time.
+The script reads settings from `config/random_experiments.toml` by default. Edit
+that file to change the number of runs, grid size, delay model, failure
+probability, traversal parameters, simulation step time, and output directory.
+Each run writes a folder under `[output].base_dir`, for example:
+
+```text
+logs/random/20260609_120000/summary.txt
+logs/random/20260609_120000/runs.jsonl
+logs/random/20260609_120000/run_config.json
+```
+
+If SRv6 simulation is enabled, `policy_events.jsonl` is also written. Set
+`[output].run_name` in the TOML to use a stable folder name; existing folders are
+not overwritten.
 
 Use a custom TOML file with:
 
 ```bash
-python scripts/random_experiments.py --config config/random_experiments.toml
+python3 scripts/random_experiments.py --config config/random_experiments.toml
 ```
 
 ## Development
@@ -109,7 +127,7 @@ python scripts/random_experiments.py --config config/random_experiments.toml
 Install test dependencies and run the suite:
 
 ```bash
-python -m pip install -e ".[test]"
+python3 -m pip install -e ".[test]"
 pytest
 ```
 
@@ -121,13 +139,51 @@ The Linux/Mininet/tc emulation layer is documented in
 [docs/mininet_srv6.md](docs/mininet_srv6.md). Start with:
 
 ```bash
-python -m emulation.env_check
-sudo python -m emulation.mininet_srv6_lab --config config/mininet_srv6.toml --no-cli
+python3 -m emulation.env_check
+python3 -m emulation.mininet_srv6_lab --config config/mininet_srv6.toml --dry-run
+sudo python3 -m emulation.mininet_srv6_lab --config config/mininet_srv6.toml --no-cli
 ```
 
-When checking connectivity from the Mininet CLI, prefer a service-loopback
-source address so replies have a routed return path:
+The sample Mininet config runs the adaptive Hamiltonian traversal mode. It
+uses a configurable 4-plane x 4-satellite constellation, propagation-derived
+per-slot delay, rotating dynamic seam links, ping-based link observations, and
+per-node UDP probe agents. It installs SRv6 policies for the probe's current
+remaining path and writes policy, tc, traversal, and agent logs under one run
+folder, such as `logs/mininet/20260609_120000/`.
+
+Change the constellation size in `config/mininet_srv6.toml`:
+
+```toml
+[constellation]
+planes = 4
+satellites_per_plane = 4
+```
+
+Change where logs go in `config/mininet_srv6.toml`:
+
+```toml
+[output]
+base_dir = "logs/mininet"
+run_name = ""
+```
+
+For `adaptive_traversal`, `planes` must be even and at least 2, and
+`satellites_per_plane` must be at least 2 because the Hamiltonian cycle is built
+over that rectangular constellation.
+
+Useful overrides:
 
 ```bash
-r0 ping -6 -I 2001:db8:100:0::1 -c 3 2001:db8:100:f::1
+python3 -m emulation.mininet_srv6_lab --config config/mininet_srv6.toml \
+  --planes 6 --satellites-per-plane 8 --duration 80 --dry-run
+
+sudo python3 -m emulation.mininet_srv6_lab --config config/mininet_srv6.toml \
+  --no-dynamic-topology --disable-agents --no-probe-packet-validation --no-cli
+```
+
+When checking connectivity from the Mininet CLI, prefer the current policy
+source node's service-loopback address so replies have a routed return path:
+
+```bash
+r9 ping -6 -I 2001:db8:100:9::1 -c 3 2001:db8:100:5::1
 ```

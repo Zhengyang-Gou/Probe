@@ -1,14 +1,17 @@
 # Level 2 Mininet SRv6 Emulation
 
-This layer maps the Python path planner into a real Linux namespace lab:
+This layer maps the Python traversal engine into a real Linux namespace lab:
 
 ```text
-Python path planner -> SRv6 SID list -> Linux iproute2 route
-                   -> Mininet namespace -> tc/netem impairment
+AdaptiveTraversalEngine -> Hamiltonian telemetry target
+                        -> SRv6 SID list -> Linux iproute2 route
+                        -> Mininet namespace -> tc/netem impairment
+                        -> UDP probe packet -> node agent telemetry log
 ```
 
 `AdaptiveTraversalEngine` remains an algorithm layer. It does not call `ip`, `tc`,
-or Mininet APIs directly. The `emulation` package is the execution layer.
+or Mininet APIs directly. The `emulation` package is the execution layer that
+turns each algorithm-selected path into a Linux SRv6 policy.
 
 ## Ubuntu 26 Setup
 
@@ -17,7 +20,7 @@ Recommended packages:
 ```bash
 sudo apt update
 sudo apt install -y mininet openvswitch-switch iproute2 iputils-ping tcpdump iperf3 python3-pytest
-python -m pip install -e ".[test]"
+python3 -m pip install -e ".[test]"
 ```
 
 Do not use old tutorial commands such as `mininet/util/install.sh -a` as the
@@ -38,7 +41,7 @@ sudo apt install -y mininet openvswitch-switch
 Run the read-only checker:
 
 ```bash
-python -m emulation.env_check
+python3 -m emulation.env_check
 ```
 
 It checks root status, OS/kernel/tool versions, required commands, iproute2 SRv6
@@ -60,30 +63,95 @@ sysctl net.ipv6.conf.all.seg6_enabled
 Dry-run without starting Mininet:
 
 ```bash
-sudo python -m emulation.mininet_srv6_lab --config config/mininet_srv6.toml --dry-run
+python3 -m emulation.mininet_srv6_lab --config config/mininet_srv6.toml --dry-run
 ```
 
-Run the lab and exit automatically:
+Run the lab and exit automatically using only the sample TOML configuration:
 
 ```bash
-sudo python -m emulation.mininet_srv6_lab \
-  --rows 4 --cols 4 --duration 20 \
-  --failure-edge 0,1 --failure-start 5 --failure-end 15 \
+sudo python3 -m emulation.mininet_srv6_lab --config config/mininet_srv6.toml --no-cli
+```
+
+You can still override values from the CLI when doing one-off tests:
+
+```bash
+sudo python3 -m emulation.mininet_srv6_lab \
+  --planes 4 --satellites-per-plane 4 --duration 40 \
+  --algorithm-mode adaptive_traversal \
+  --failure-edge 9,5 --failure-start 5 --failure-end 15 \
   --no-cli
 ```
 
-Run with the sample TOML:
-
-```bash
-sudo python -m emulation.mininet_srv6_lab --config config/mininet_srv6.toml --no-cli
-```
-
-The script writes:
+The script writes one folder per run:
 
 ```text
-logs/mininet_srv6_<timestamp>.log
-logs/policy_updates_<timestamp>.jsonl
-logs/tc_updates_<timestamp>.jsonl
+logs/mininet/<run>/
+  run_config.json
+  mininet_srv6.log
+  policy_updates.jsonl
+  tc_updates.jsonl
+  traversal_events.jsonl
+  agent_r<node>.jsonl
+```
+
+The output location is controlled in the TOML:
+
+```toml
+[output]
+base_dir = "logs/mininet"
+run_name = ""
+```
+
+If `run_name` is empty, a timestamp is used. If a folder already exists, the
+script appends `_2`, `_3`, and so on instead of overwriting it.
+
+The sample TOML uses `adaptive_traversal`, a 4-plane x 4-satellite
+constellation, and the Hamiltonian cycle:
+
+```text
+0 -> 4 -> 8 -> 12 -> 13 -> 9 -> 5 -> 6 -> 10 -> 14 -> 15 -> 11 -> 7 -> 3 -> 2 -> 1 -> 0
+```
+
+The configured `9 <-> 5` failure is active from 5s to 15s, so the default run
+exercises a replan when the probe tries to move from `r9` to `r5`.
+
+The constellation scale is controlled by:
+
+```toml
+[constellation]
+planes = 4
+satellites_per_plane = 4
+```
+
+`rows` and `cols` are still accepted as legacy aliases. In
+`adaptive_traversal` mode, `planes` must be even and `inter_plane_links` must be
+true because the Hamiltonian cycle uses inter-plane edges.
+
+The default realism knobs are:
+
+```toml
+[delay]
+model = "propagation"
+period_slots = 8
+
+[dynamic_topology]
+enabled = true
+model = "rotating_seam"
+
+[observation]
+mode = "ping"
+stale_after_seconds = 2
+
+[agent]
+enabled = true
+probe_packet_validation = true
+```
+
+For a baseline/control run, disable the dynamic and agent pieces from the CLI:
+
+```bash
+sudo python3 -m emulation.mininet_srv6_lab --config config/mininet_srv6.toml \
+  --no-dynamic-topology --disable-agents --no-probe-packet-validation --no-cli
 ```
 
 ## Inspecting the Lab
@@ -91,9 +159,9 @@ logs/tc_updates_<timestamp>.jsonl
 When the script enters the Mininet CLI, inspect routes and tc state with:
 
 ```bash
-r0 ip -6 route
-r0 tc qdisc show dev r0-r1
-r0 ping -6 -I 2001:db8:100:0::1 -c 3 2001:db8:100:f::1
+r9 ip -6 route
+r9 tc qdisc show dev r9-r8
+r9 ping -6 -I 2001:db8:100:9::1 -c 3 2001:db8:100:5::1
 ```
 
 The lab uses explicit interface names such as `r0-r1` and `r1-r0`; if routes or
@@ -104,16 +172,31 @@ tc qdiscs mention different names, check that `addLink` used `intfName1` and
 
 - Linux SRv6 routes are installed inside Mininet host namespaces with iproute2.
 - Transit Node SIDs use `seg6local action End`.
-- The fixed target Node SID uses `seg6local action End.DT6 table 254` so the
-  final segment decapsulates the inner IPv6 packet and looks up the service
-  address in the main table.
+- Every node also has a separate decapsulation SID using
+  `seg6local action End.DT6 table 254`, so any Hamiltonian telemetry target can
+  be the final SRv6 segment.
 - Source policies use `encap seg6 mode encap`.
 - Plain IPv6 routes to every node's service loopback are installed as return
   paths for validation traffic.
-- `tc netem` delay and loss are applied to the veth interfaces.
-- Dynamic replanning is a minimal root-to-target loop that removes or restores a
-  configured failed edge from the Python topology and updates the root SRv6
-  route when the path changes.
+- `tc netem` delay and loss are applied to the veth interfaces. With
+  `delay.model = "propagation"`, per-slot delay comes from a simple orbital
+  geometry model rather than a single constant.
+- Dynamic topology schedules can remove links by applying `loss 100%`; the
+  sample `rotating_seam` model moves a disabled inter-plane seam each slot.
+- In `adaptive_traversal` mode, the probe follows the grid Hamiltonian cycle,
+  observes link state through the configured provider, replans with the Python
+  engine, and installs the current remaining path as an SRv6 policy on the
+  current Mininet node.
+- With `observation.mode = "ping"`, the engine checks adjacent Mininet links by
+  running IPv6 ping from the node namespace. Stale DOWN observations can expire
+  via `observation.stale_after_seconds`, which lets dynamic links recover in
+  the estimated topology.
+- With agents enabled, every node runs `emulation.node_agent` and accepts a UDP
+  `ProbePacketPayload`. Validation sends the packet through the installed SRv6
+  policy with `emulation.probe_client`, and the target agent logs packet fields
+  plus local interface observations.
+- `root_target` mode remains available for the old single source-to-target SRv6
+  smoke test.
 
 ## Common Errors
 
@@ -133,9 +216,17 @@ ip -6 route help | grep -E "seg6|seg6local"
 
 Check IPv6 forwarding, `seg6_enabled`, underlay routes, Node SID routes, and
 whether `tc` is currently applying `loss 100%` on the path. For encapsulated
-traffic, the target SID must use `End.DT6` or another decapsulation behavior,
-and the reply source/destination must have a return route. The lab validation
-uses `-I 2001:db8:100:0::1` to make replies target r0's service loopback.
+traffic, the final segment must be one of the per-node decapsulation SIDs, and
+the reply source/destination must have a return route. The lab validation uses
+the service-loopback address of the current policy source, such as
+`-I 2001:db8:100:9::1`.
+
+`probe packet validation failed`
+
+Check that `[agent] enabled = true`, no other process is using the configured
+UDP port, and the policy target's service loopback is reachable. The target
+node's `logs/mininet/<run>/agent_r<node>.jsonl` file records whether the packet
+arrived and what telemetry was observed.
 
 `Mininet import failed`
 

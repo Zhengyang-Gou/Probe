@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import argparse
+import json
 import random
 import tomllib
 from collections import Counter
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+from datetime import datetime
+from enum import Enum
 from math import cos, inf, pi
 from pathlib import Path
 from statistics import mean
@@ -70,6 +73,9 @@ class ExperimentConfig:
     srv6_locator_prefix: str
     srv6_base_srh_overhead_bytes: int
     srv6_per_sid_overhead_bytes: int
+    output_dir: str
+    run_name: str | None
+    write_stdout: bool
 
 
 def build_random_delay_table(
@@ -416,8 +422,10 @@ def load_config(path: Path) -> ExperimentConfig:
     traversal = raw.get("traversal", {})
     simulation = raw.get("simulation", {})
     srv6 = raw.get("srv6", {})
+    output = raw.get("output", {})
 
     max_hop = int(traversal.get("max_hop", 0))
+    run_name = str(output.get("run_name", "")).strip()
     config = ExperimentConfig(
         runs=int(experiment.get("runs", 20)),
         rows=int(grid.get("rows", 10)),
@@ -438,6 +446,9 @@ def load_config(path: Path) -> ExperimentConfig:
         srv6_locator_prefix=str(srv6.get("locator_prefix", "fc00:0")),
         srv6_base_srh_overhead_bytes=int(srv6.get("base_srh_overhead_bytes", 8)),
         srv6_per_sid_overhead_bytes=int(srv6.get("per_sid_overhead_bytes", 16)),
+        output_dir=str(output.get("base_dir", "logs/random")),
+        run_name=run_name or None,
+        write_stdout=bool(output.get("write_stdout", True)),
     )
     validate_config(config, path)
     return config
@@ -476,11 +487,78 @@ def validate_config(config: ExperimentConfig, path: Path) -> None:
         raise ValueError(f"{path}: srv6.base_srh_overhead_bytes must be non-negative")
     if config.srv6_per_sid_overhead_bytes < 0:
         raise ValueError(f"{path}: srv6.per_sid_overhead_bytes must be non-negative")
+    if not config.output_dir.strip():
+        raise ValueError(f"{path}: output.base_dir must be non-empty")
+
+
+def make_run_dir(base_dir: Path, run_name: str | None, timestamp: str) -> Path:
+    """Create a unique directory for one experiment run."""
+
+    base_dir.mkdir(parents=True, exist_ok=True)
+    name = safe_run_name(run_name or timestamp)
+    candidate = base_dir / name
+    if not candidate.exists():
+        candidate.mkdir()
+        return candidate
+    for suffix in range(2, 1000):
+        candidate = base_dir / f"{name}_{suffix}"
+        if not candidate.exists():
+            candidate.mkdir()
+            return candidate
+    raise RuntimeError(f"could not allocate a run directory under {base_dir}")
+
+
+def safe_run_name(value: str) -> str:
+    """Return a filesystem-friendly run name."""
+
+    cleaned = "".join(char if char.isalnum() or char in {"-", "_", "."} else "_" for char in value)
+    cleaned = cleaned.strip("._-")
+    return cleaned or "run"
+
+
+def write_json_file(path: Path, payload: object) -> None:
+    """Write an indented JSON file."""
+
+    path.write_text(json.dumps(to_jsonable(payload), indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def write_jsonl(handle, payload: object) -> None:
+    """Write one JSON object line."""
+
+    handle.write(json.dumps(to_jsonable(payload), sort_keys=True) + "\n")
+    handle.flush()
+
+
+def to_jsonable(value: object) -> object:
+    """Convert dataclasses and enums into JSON-serializable values."""
+
+    if isinstance(value, Enum):
+        return value.value
+    if hasattr(value, "__dataclass_fields__"):
+        return to_jsonable(asdict(value))
+    if isinstance(value, dict):
+        return {str(key): to_jsonable(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [to_jsonable(item) for item in value]
+    return value
 
 
 def main() -> None:
     args = parse_args()
     config = load_config(args.config)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_dir = make_run_dir(Path(config.output_dir), config.run_name, timestamp)
+    summary_path = run_dir / "summary.txt"
+    results_path = run_dir / "runs.jsonl"
+    policy_events_path = run_dir / "policy_events.jsonl"
+    config_path = run_dir / "run_config.json"
+    output_lines: list[str] = []
+
+    def emit(line: str = "") -> None:
+        output_lines.append(line)
+        if config.write_stdout:
+            print(line, flush=True)
+
     rng = random.Random(config.seed)
     topology = make_grid_topology(config.rows, config.cols)
     max_hop = config.max_hop if config.max_hop is not None else config.rows * config.cols * 30
@@ -490,113 +568,139 @@ def main() -> None:
     srv6_results: list[SRv6ExperimentResult] = []
     sid_allocator = SRv6SidAllocator(config.srv6_locator_prefix)
 
-    print(f"config: {args.config}", flush=True)
+    write_json_file(
+        config_path,
+        {
+            "config_file": str(args.config),
+            "run_dir": str(run_dir),
+            "timestamp": timestamp,
+            "config": config,
+        },
+    )
+    emit(f"config: {args.config}")
+    emit(f"output_dir: {run_dir}")
     if config.srv6_enabled:
-        print(
+        emit(
             "run status                  visited   hops actual_delay down_edges "
             "active_down_mean active_down_max srv6_updates mean_sid_len max_sid_len "
-            "mean_srh_bytes max_srh_bytes",
-            flush=True,
+            "mean_srh_bytes max_srh_bytes"
         )
     else:
-        print(
+        emit(
             "run status                  visited   hops actual_delay down_edges "
-            "active_down_mean active_down_max",
-            flush=True,
+            "active_down_mean active_down_max"
         )
-    for run_id in range(1, config.runs + 1):
-        run_seed = rng.randrange(2**32)
-        run_rng = random.Random(run_seed)
-        if config.delay_model == "leo":
-            delay_table = build_leo_delay_table(
-                topology=topology,
-                rows=config.rows,
-                cols=config.cols,
-                period_slots=config.period_slots,
-                intra_delay=config.intra_delay,
-                inter_min_delay=config.inter_min_delay,
-                inter_max_delay=config.inter_max_delay,
-            )
-            actual_delay_provider = build_leo_actual_delay_provider(
-                rows=config.rows,
-                cols=config.cols,
-                period_slots=config.period_slots,
-                intra_delay=config.intra_delay,
-                inter_min_delay=config.inter_min_delay,
-                inter_max_delay=config.inter_max_delay,
-            )
-        else:
-            delay_table = build_random_delay_table(
-                topology,
-                period_slots=config.period_slots,
-                rng=run_rng,
-                min_delay=config.min_delay,
-                max_delay=config.max_delay,
-            )
-            actual_delay_provider = build_slot_actual_delay_provider(delay_table)
-        provider = build_random_provider(
-            topology,
-            rng=run_rng,
-            down_probability=config.down_probability,
-        )
-        if config.srv6_enabled:
-            result, _policy_events = run_one_srv6_experiment(
-                run_id=run_id,
-                topology=topology,
-                delay_table=delay_table,
-                actual_delay_provider=actual_delay_provider,
-                provider=provider,
-                max_hop=max_hop,
-                alpha=config.alpha,
-                step_time=config.step_time,
-                cycle_route=cycle_route,
-                sid_allocator=sid_allocator,
-                base_srh_overhead_bytes=config.srv6_base_srh_overhead_bytes,
-                per_sid_overhead_bytes=config.srv6_per_sid_overhead_bytes,
-            )
-            srv6_results.append(result)
-            print(
-                f"{result.run_id:>3} "
-                f"{result.status.value:<23} "
-                f"{result.visited_count:>{node_width}}/{result.total_nodes:<{node_width}} "
-                f"{result.hop_count:>4} "
-                f"{result.total_delay:>12.2f} "
-                f"{result.down_edges:>10} "
-                f"{result.mean_active_down_edges:>16.2f} "
-                f"{result.max_active_down_edges:>15} "
-                f"{result.srv6_policy_updates:>12} "
-                f"{result.mean_segment_list_length:>12.2f} "
-                f"{result.max_segment_list_length:>11} "
-                f"{result.mean_srh_overhead_bytes:>14.2f} "
-                f"{result.max_srh_overhead_bytes:>13}",
-                flush=True,
-            )
-        else:
-            result = run_one_experiment(
-                run_id=run_id,
-                topology=topology,
-                delay_table=delay_table,
-                actual_delay_provider=actual_delay_provider,
-                provider=provider,
-                max_hop=max_hop,
-                alpha=config.alpha,
-                step_time=config.step_time,
-                cycle_route=cycle_route,
-            )
-            results.append(result)
-            print(
-                f"{result.run_id:>3} "
-                f"{result.status.value:<23} "
-                f"{result.visited_count:>{node_width}}/{result.total_nodes:<{node_width}} "
-                f"{result.hop_count:>4} "
-                f"{result.total_delay:>12.2f} "
-                f"{result.down_edges:>10} "
-                f"{result.mean_active_down_edges:>16.2f} "
-                f"{result.max_active_down_edges:>15}",
-                flush=True,
-            )
 
-    print(summarize_srv6(srv6_results) if config.srv6_enabled else summarize(results))
+    policy_events_file = None
+    try:
+        with results_path.open("w", encoding="utf-8") as results_file:
+            if config.srv6_enabled:
+                policy_events_file = policy_events_path.open("w", encoding="utf-8")
+            for run_id in range(1, config.runs + 1):
+                run_seed = rng.randrange(2**32)
+                run_rng = random.Random(run_seed)
+                if config.delay_model == "leo":
+                    delay_table = build_leo_delay_table(
+                        topology=topology,
+                        rows=config.rows,
+                        cols=config.cols,
+                        period_slots=config.period_slots,
+                        intra_delay=config.intra_delay,
+                        inter_min_delay=config.inter_min_delay,
+                        inter_max_delay=config.inter_max_delay,
+                    )
+                    actual_delay_provider = build_leo_actual_delay_provider(
+                        rows=config.rows,
+                        cols=config.cols,
+                        period_slots=config.period_slots,
+                        intra_delay=config.intra_delay,
+                        inter_min_delay=config.inter_min_delay,
+                        inter_max_delay=config.inter_max_delay,
+                    )
+                else:
+                    delay_table = build_random_delay_table(
+                        topology,
+                        period_slots=config.period_slots,
+                        rng=run_rng,
+                        min_delay=config.min_delay,
+                        max_delay=config.max_delay,
+                    )
+                    actual_delay_provider = build_slot_actual_delay_provider(delay_table)
+                provider = build_random_provider(
+                    topology,
+                    rng=run_rng,
+                    down_probability=config.down_probability,
+                )
+                if config.srv6_enabled:
+                    result, policy_events = run_one_srv6_experiment(
+                        run_id=run_id,
+                        topology=topology,
+                        delay_table=delay_table,
+                        actual_delay_provider=actual_delay_provider,
+                        provider=provider,
+                        max_hop=max_hop,
+                        alpha=config.alpha,
+                        step_time=config.step_time,
+                        cycle_route=cycle_route,
+                        sid_allocator=sid_allocator,
+                        base_srh_overhead_bytes=config.srv6_base_srh_overhead_bytes,
+                        per_sid_overhead_bytes=config.srv6_per_sid_overhead_bytes,
+                    )
+                    srv6_results.append(result)
+                    write_jsonl(results_file, result)
+                    if policy_events_file is not None:
+                        for event in policy_events:
+                            write_jsonl(policy_events_file, event)
+                    emit(
+                        f"{result.run_id:>3} "
+                        f"{result.status.value:<23} "
+                        f"{result.visited_count:>{node_width}}/{result.total_nodes:<{node_width}} "
+                        f"{result.hop_count:>4} "
+                        f"{result.total_delay:>12.2f} "
+                        f"{result.down_edges:>10} "
+                        f"{result.mean_active_down_edges:>16.2f} "
+                        f"{result.max_active_down_edges:>15} "
+                        f"{result.srv6_policy_updates:>12} "
+                        f"{result.mean_segment_list_length:>12.2f} "
+                        f"{result.max_segment_list_length:>11} "
+                        f"{result.mean_srh_overhead_bytes:>14.2f} "
+                        f"{result.max_srh_overhead_bytes:>13}"
+                    )
+                else:
+                    result = run_one_experiment(
+                        run_id=run_id,
+                        topology=topology,
+                        delay_table=delay_table,
+                        actual_delay_provider=actual_delay_provider,
+                        provider=provider,
+                        max_hop=max_hop,
+                        alpha=config.alpha,
+                        step_time=config.step_time,
+                        cycle_route=cycle_route,
+                    )
+                    results.append(result)
+                    write_jsonl(results_file, result)
+                    emit(
+                        f"{result.run_id:>3} "
+                        f"{result.status.value:<23} "
+                        f"{result.visited_count:>{node_width}}/{result.total_nodes:<{node_width}} "
+                        f"{result.hop_count:>4} "
+                        f"{result.total_delay:>12.2f} "
+                        f"{result.down_edges:>10} "
+                        f"{result.mean_active_down_edges:>16.2f} "
+                        f"{result.max_active_down_edges:>15}"
+                    )
+    finally:
+        if policy_events_file is not None:
+            policy_events_file.close()
+
+    emit(summarize_srv6(srv6_results) if config.srv6_enabled else summarize(results))
+    summary_path.write_text("\n".join(output_lines) + "\n", encoding="utf-8")
+    if config.write_stdout:
+        print(f"summary: {summary_path}", flush=True)
+        print(f"runs: {results_path}", flush=True)
+        if config.srv6_enabled:
+            print(f"policy events: {policy_events_path}", flush=True)
 
 
 if __name__ == "__main__":

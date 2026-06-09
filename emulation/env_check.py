@@ -118,6 +118,13 @@ def _check_srv6_iproute2_syntax() -> CheckResult:
             "SRv6 iproute2 syntax",
             "ip -6 route help advertises seg6/seg6local",
         )
+    if "Operation not permitted" in output or "Cannot open netlink socket" in output:
+        return CheckResult(
+            "WARN",
+            "SRv6 iproute2 syntax",
+            "ip -6 route help could not open netlink socket in this environment; "
+            "rerun outside the sandbox or with sudo to confirm seg6/seg6local support",
+        )
     return CheckResult(
         "FAIL",
         "SRv6 iproute2 syntax",

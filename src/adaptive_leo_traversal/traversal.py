@@ -35,6 +35,7 @@ class AdaptiveTraversalEngine:
     max_hop: int
     cycle_route: tuple[int, ...]
     alpha: float = 0.85
+    observation_ttl: float | None = None
     _telemetry_successor: dict[int, int] = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -44,6 +45,8 @@ class AdaptiveTraversalEngine:
             raise ValueError("max_hop must be non-negative")
         if not 0 < self.alpha <= 1:
             raise ValueError("alpha must be in the interval (0, 1]")
+        if self.observation_ttl is not None and self.observation_ttl < 0:
+            raise ValueError("observation_ttl must be non-negative")
         route_nodes = set(self.cycle_route)
         if self.root not in route_nodes:
             raise ValueError("cycle_route must include root")
@@ -54,13 +57,16 @@ class AdaptiveTraversalEngine:
     def initialize_probe(self, now: float) -> ProbeState:
         """Create a probe at the root node."""
 
-        return ProbeState(
+        probe = ProbeState(
             root=self.root,
             current_node=self.root,
             next_telemetry_node=self.root,
             hop_limit=self.max_hop,
             last_slot=self.delay_table.slot_at(now),
         )
+        if self.observation_ttl is not None:
+            probe.link_obs_table.stale_after = self.observation_ttl
+        return probe
 
     def on_probe_arrival(
         self,
@@ -71,6 +77,8 @@ class AdaptiveTraversalEngine:
     ) -> TraversalResult:
         """Handle one probe arrival and return the next routing action."""
 
+        if self.observation_ttl is not None:
+            probe.link_obs_table.stale_after = self.observation_ttl
         probe.current_node = current_node
         if probe.next_telemetry_node is None:
             probe.next_telemetry_node = self.root
@@ -78,7 +86,7 @@ class AdaptiveTraversalEngine:
             probe.hop_limit = self.max_hop
         slot = self.delay_table.slot_at(now)
         previous_slot = probe.last_slot
-        old_down_edges = probe.link_obs_table.down_edges()
+        old_down_edges = probe.link_obs_table.recent_down_edges(now)
 
         if self._all_nodes_visited(probe) and current_node == self.root:
             probe.last_slot = slot
@@ -92,7 +100,7 @@ class AdaptiveTraversalEngine:
         else:
             self._record_failed_next_hop(probe, current_node, now, physical_link_state_provider)
 
-        recent_down_edges = probe.link_obs_table.down_edges()
+        recent_down_edges = probe.link_obs_table.recent_down_edges(now)
         estimated_topology = self.base_topology.without_edges(recent_down_edges)
 
         if self._all_nodes_visited(probe) and current_node == self.root:

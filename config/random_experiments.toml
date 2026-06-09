@@ -34,3 +34,8 @@ enabled = true
 locator_prefix = "fc00:0"
 base_srh_overhead_bytes = 8
 per_sid_overhead_bytes = 16
+
+[output]
+base_dir = "logs/random"
+run_name = ""
+write_stdout = true

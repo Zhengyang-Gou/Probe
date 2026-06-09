@@ -21,3 +21,14 @@ def test_up_observation_overrides_old_down_state() -> None:
 
     assert table.get_state((0, 1), now=2.0) is LinkState.UP
     assert table.recent_down_edges(now=2.0) == set()
+
+
+def test_down_observation_expires_when_stale_after_is_set() -> None:
+    table = LinkObservationTable(stale_after=2.0)
+
+    table.update((0, 1), LinkState.DOWN, observed_time=10.0)
+
+    assert table.get_state((0, 1), now=12.0) is LinkState.DOWN
+    assert table.recent_down_edges(now=12.0) == {(0, 1)}
+    assert table.get_state((0, 1), now=12.1) is None
+    assert table.recent_down_edges(now=12.1) == set()

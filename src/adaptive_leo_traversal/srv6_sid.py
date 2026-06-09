@@ -28,9 +28,20 @@ class SRv6SidAllocator:
         self._validate_node(target, "target")
         return f"{self._adj_locator_prefix()}:{source:x}:{target:x}::1"
 
+    def decap_sid(self, node: int) -> str:
+        """Return the decapsulation SID assigned to ``node``."""
+
+        self._validate_node(node, "node")
+        return f"{self._decap_locator_prefix()}:{node:x}::1"
+
     def _adj_locator_prefix(self) -> str:
         parts = self.locator_prefix.split(":")
         parts[-1] = "a"
+        return ":".join(parts)
+
+    def _decap_locator_prefix(self) -> str:
+        parts = self.locator_prefix.split(":")
+        parts[-1] = "d"
         return ":".join(parts)
 
     @staticmethod

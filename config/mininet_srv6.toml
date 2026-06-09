@@ -2,18 +2,57 @@
 rows = 4
 cols = 4
 
+[constellation]
+planes = 4
+satellites_per_plane = 4
+intra_plane_wrap = false
+inter_plane_links = true
+inter_plane_wrap = false
+
 [srv6]
 locator_prefix = "fc00:0"
 mode = "node"
 decap_table = "254"
 
 [emulation]
-duration = 20
+duration = 40
 slot_seconds = 1
 default_delay_ms = 5
 enable_cli = true
 
+[delay]
+model = "propagation"
+period_slots = 8
+constant_delay_ms = 5
+altitude_km = 550
+inclination_deg = 53
+min_delay_ms = 0.1
+
+[dynamic_topology]
+enabled = true
+model = "rotating_seam"
+period_slots = 8
+
+[algorithm]
+mode = "adaptive_traversal"
+max_hop = 500
+alpha = 0.85
+validate_each_policy = true
+
+[observation]
+mode = "ping"
+stale_after_seconds = 2
+
+[agent]
+enabled = true
+probe_packet_validation = true
+udp_port = 5005
+
+[output]
+base_dir = "logs/mininet"
+run_name = ""
+
 [failure]
-edge = [0, 1]
+edge = [9, 5]
 start = 5
 end = 15

@@ -18,12 +18,20 @@ def test_adj_sid_is_directional() -> None:
     assert allocator.adj_sid(4, 0) == "fc00:a:4:0::1"
 
 
+def test_decap_sid_uses_separate_locator() -> None:
+    allocator = SRv6SidAllocator()
+
+    assert allocator.decap_sid(4) == "fc00:d:4::1"
+
+
 @pytest.mark.parametrize("value", [-1, 1.5, "1", True])
 def test_sid_allocator_rejects_invalid_node_ids(value: object) -> None:
     allocator = SRv6SidAllocator()
 
     with pytest.raises(ValueError):
         allocator.node_sid(value)  # type: ignore[arg-type]
+    with pytest.raises(ValueError):
+        allocator.decap_sid(value)  # type: ignore[arg-type]
 
 
 def test_sid_allocator_rejects_empty_locator_prefix() -> None:
