@@ -173,8 +173,9 @@ tc qdiscs mention different names, check that `addLink` used `intfName1` and
 - Linux SRv6 routes are installed inside Mininet host namespaces with iproute2.
 - Transit Node SIDs use `seg6local action End`.
 - Every node also has a separate decapsulation SID using
-  `seg6local action End.DT6 table 254`, so any Hamiltonian telemetry target can
-  be the final SRv6 segment.
+  `seg6local action End.DX6 nh6 ::`, so any Hamiltonian telemetry target can
+  be the final SRv6 segment and decapsulated probe traffic is delivered by the
+  local IPv6 route to the service loopback.
 - Source policies use `encap seg6 mode encap`.
 - Plain IPv6 routes to every node's service loopback are installed as return
   paths for validation traffic.

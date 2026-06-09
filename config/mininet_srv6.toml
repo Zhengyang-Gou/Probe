@@ -12,7 +12,7 @@ inter_plane_wrap = false
 [srv6]
 locator_prefix = "fc00:0"
 mode = "node"
-decap_table = "254"
+decap_table = "255"
 
 [emulation]
 duration = 40

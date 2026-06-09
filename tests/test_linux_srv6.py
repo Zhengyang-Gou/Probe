@@ -3,6 +3,8 @@ import pytest
 from adaptive_leo_traversal.linux_srv6 import (
     render_enable_srv6_sysctls,
     render_end_dt6_sid_route,
+    render_end_dx6_sid_route,
+    render_local_ipv6_route,
     render_node_sid_route,
     render_plain_ipv6_route,
     render_srv6_encap_route,
@@ -37,7 +39,25 @@ def test_render_end_dt6_sid_route_decaps_to_lookup_table() -> None:
         "action",
         "End.DT6",
         "table",
-        "254",
+        "255",
+        "dev",
+        "lo",
+    ]
+
+
+def test_render_end_dx6_sid_route_decaps_to_local_next_hop() -> None:
+    assert render_end_dx6_sid_route("fc00:d:f::1") == [
+        "ip",
+        "-6",
+        "route",
+        "replace",
+        "fc00:d:f::1/128",
+        "encap",
+        "seg6local",
+        "action",
+        "End.DX6",
+        "nh6",
+        "::",
         "dev",
         "lo",
     ]
@@ -139,4 +159,19 @@ def test_render_plain_ipv6_route_supports_via_and_direct() -> None:
         "fc00:0:4::1/128",
         "dev",
         "r0-r4",
+    ]
+
+
+def test_render_local_ipv6_route_supports_table() -> None:
+    assert render_local_ipv6_route("2001:db8:100:4::1/128", table="255") == [
+        "ip",
+        "-6",
+        "route",
+        "replace",
+        "local",
+        "2001:db8:100:4::1/128",
+        "dev",
+        "lo",
+        "table",
+        "255",
     ]

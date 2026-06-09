@@ -36,7 +36,7 @@ def test_mininet_srv6_config_file_loads() -> None:
     assert config.probe_packet_validation is True
     assert config.output_dir == "logs/mininet"
     assert config.run_name is None
-    assert config.decap_table == "254"
+    assert config.decap_table == "255"
     assert config.algorithm_mode == "adaptive_traversal"
     assert config.max_hop == 500
     assert config.alpha == 0.85
@@ -142,13 +142,25 @@ def test_each_node_has_transit_and_decap_sid_routes() -> None:
         "-6",
         "route",
         "replace",
+        "local",
+        "2001:db8:100:1::1/128",
+        "dev",
+        "lo",
+        "table",
+        "255",
+    ] in commands
+    assert [
+        "ip",
+        "-6",
+        "route",
+        "replace",
         "fc00:0:1::1/128",
         "encap",
         "seg6local",
         "action",
         "End",
         "dev",
-        "r1-r0",
+        "lo",
     ] in commands
     assert [
         "ip",
@@ -159,11 +171,11 @@ def test_each_node_has_transit_and_decap_sid_routes() -> None:
         "encap",
         "seg6local",
         "action",
-        "End.DT6",
-        "table",
-        "254",
+        "End.DX6",
+        "nh6",
+        "::",
         "dev",
-        "r1-r0",
+        "lo",
     ] in commands
 
 

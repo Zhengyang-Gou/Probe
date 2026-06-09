@@ -32,7 +32,8 @@ from adaptive_leo_traversal.delay_table import DelayTable
 from adaptive_leo_traversal.cycle import make_grid_hamiltonian_cycle
 from adaptive_leo_traversal.linux_srv6 import (
     render_enable_srv6_sysctls,
-    render_end_dt6_sid_route,
+    render_end_dx6_sid_route,
+    render_local_ipv6_route,
     render_node_sid_route,
     render_plain_ipv6_route,
     render_srv6_encap_route,
@@ -71,7 +72,7 @@ class MininetSrv6Config:
     duration: float = 20.0
     slot_seconds: float = 1.0
     locator_prefix: str = "fc00:0"
-    decap_table: str = "254"
+    decap_table: str = "255"
     dst_prefix_base: str = "2001:db8"
     default_delay_ms: float = 5.0
     delay_model: str = "constant"
@@ -1056,7 +1057,6 @@ def _render_node_setup_commands(
     node: int,
 ) -> list[list[str]]:
     ifaces = [edge_iface_name(node, neighbor) for neighbor in sorted(state.topology.neighbors(node))]
-    sid_dev = ifaces[0] if ifaces else "lo"
     commands = [["ip", "link", "set", "lo", "up"]]
     commands.extend(render_enable_srv6_sysctls(ifaces))
     commands.append(["ip", "-6", "route", "del", "default"])
@@ -1065,12 +1065,14 @@ def _render_node_setup_commands(
         commands.append(["ip", "link", "set", iface, "up"])
         commands.append(["ip", "-6", "addr", "add", _link_addr(config, state, node, neighbor), "dev", iface])
     commands.append(["ip", "-6", "addr", "add", _service_addr(config, node), "dev", "lo"])
-    commands.append(render_node_sid_route(state.allocator.node_sid(node), dev=sid_dev))
+    # Keep the service loopback explicit in the local table for local delivery after decap.
+    commands.append(render_local_ipv6_route(_service_addr(config, node), dev="lo", table=config.decap_table))
+    commands.append(render_node_sid_route(state.allocator.node_sid(node), dev="lo"))
     commands.append(
-        render_end_dt6_sid_route(
+        render_end_dx6_sid_route(
             state.allocator.decap_sid(node),
-            lookup_table=config.decap_table,
-            dev=sid_dev,
+            nh6="::",
+            dev="lo",
         )
     )
     return commands
@@ -1329,7 +1331,7 @@ def _run_validation(
 ) -> None:
     target_addr = _service_addr(config, policy.target, with_prefix=False)
     source_addr = _service_addr(config, policy.source, with_prefix=False)
-    runner.run(hosts[policy.source], ["ping", "-6", "-I", source_addr, "-c", "2", target_addr])
+    runner.run(hosts[policy.source], ["ping", "-6", "-I", source_addr, "-c", "2", "-W", "1", target_addr])
     runner.run(hosts[policy.source], ["ip", "-6", "route", "get", target_addr, "from", source_addr])
     runner.run(hosts[policy.source], ["ip", "-6", "route", "show"])
     runner.run(hosts[policy.target], ["ip", "-6", "addr", "show", "lo"])
@@ -1387,7 +1389,7 @@ def _print_validation_commands(
 ) -> None:
     target_addr = _service_addr(config, policy.target, with_prefix=False)
     source_addr = _service_addr(config, policy.source, with_prefix=False)
-    printer.run(f"r{policy.source}", ["ping", "-6", "-I", source_addr, "-c", "2", target_addr])
+    printer.run(f"r{policy.source}", ["ping", "-6", "-I", source_addr, "-c", "2", "-W", "1", target_addr])
     printer.run(f"r{policy.source}", ["ip", "-6", "route", "get", target_addr, "from", source_addr])
     printer.run(f"r{policy.source}", ["ip", "-6", "route", "show"])
     printer.run(f"r{policy.target}", ["ip", "-6", "addr", "show", "lo"])

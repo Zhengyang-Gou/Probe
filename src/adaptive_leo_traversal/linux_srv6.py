@@ -56,7 +56,7 @@ def render_node_sid_route(
 
 def render_end_dt6_sid_route(
     sid: str,
-    lookup_table: str = "254",
+    lookup_table: str = "255",
     dev: str = "lo",
 ) -> list[str]:
     """Render a seg6local End.DT6 route that decapsulates into an IPv6 table."""
@@ -76,6 +76,33 @@ def render_end_dt6_sid_route(
         "End.DT6",
         "table",
         lookup_table,
+        "dev",
+        dev,
+    ]
+
+
+def render_end_dx6_sid_route(
+    sid: str,
+    nh6: str = "::",
+    dev: str = "lo",
+) -> list[str]:
+    """Render a seg6local End.DX6 route that decapsulates to an IPv6 next hop."""
+
+    sid_prefix = _with_default_prefixlen(_require_non_empty(sid, "sid"), 128)
+    nh6 = _require_non_empty(nh6, "nh6")
+    dev = _require_non_empty(dev, "dev")
+    return [
+        "ip",
+        "-6",
+        "route",
+        "replace",
+        sid_prefix,
+        "encap",
+        "seg6local",
+        "action",
+        "End.DX6",
+        "nh6",
+        nh6,
         "dev",
         dev,
     ]
@@ -129,6 +156,17 @@ def render_plain_ipv6_route(dst_prefix: str, via: str | None, dev: str) -> list[
     if via is not None:
         command.extend(["via", _require_non_empty(via, "via")])
     command.extend(["dev", dev])
+    return command
+
+
+def render_local_ipv6_route(dst_prefix: str, dev: str = "lo", table: str | None = None) -> list[str]:
+    """Render a local IPv6 route for table-scoped decapsulation lookups."""
+
+    dst_prefix = _require_non_empty(dst_prefix, "dst_prefix")
+    dev = _require_non_empty(dev, "dev")
+    command = ["ip", "-6", "route", "replace", "local", dst_prefix, "dev", dev]
+    if table is not None:
+        command.extend(["table", _require_non_empty(table, "table")])
     return command
 
 
