@@ -3,17 +3,20 @@
 from __future__ import annotations
 
 import argparse
-import json
 import random
+import sys
 import tomllib
 from collections import Counter
 from collections.abc import Callable
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import datetime
-from enum import Enum
 from math import cos, inf, pi
 from pathlib import Path
 from statistics import mean
+
+_PROJECT_SRC = Path(__file__).resolve().parents[1] / "src"
+if _PROJECT_SRC.exists() and str(_PROJECT_SRC) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_SRC))
 
 from adaptive_leo_traversal import (
     AdaptiveTraversalEngine,
@@ -24,6 +27,12 @@ from adaptive_leo_traversal import (
     TraversalStatus,
     make_grid_hamiltonian_cycle,
     make_grid_topology,
+)
+from adaptive_leo_traversal.experiment_utils import (
+    parse_traversal_statuses,
+    safe_run_name,
+    write_json_file,
+    write_jsonl,
 )
 from adaptive_leo_traversal.simulation import StaticLinkStateProvider
 from adaptive_leo_traversal.srv6_simulation import SRv6SimulationRunner
@@ -65,7 +74,10 @@ class ExperimentConfig:
     intra_delay: float
     inter_min_delay: float
     inter_max_delay: float
+    failure_mode: str
     down_probability: float
+    down_edges_per_scenario: int | None
+    interrupted_statuses: tuple[TraversalStatus, ...]
     max_hop: int | None
     alpha: float
     step_time: float
@@ -208,10 +220,18 @@ def build_random_provider(
     topology: Topology,
     rng: random.Random,
     down_probability: float,
+    down_edges_per_scenario: int | None = None,
 ) -> StaticLinkStateProvider:
     """Create permanent down intervals for a random subset of topology edges."""
 
     provider = StaticLinkStateProvider()
+    if down_edges_per_scenario is not None:
+        edges = sorted(topology.edges)
+        selected_count = min(down_edges_per_scenario, len(edges))
+        for u, v in rng.sample(edges, k=selected_count):
+            provider.add_down_interval(u, v, start=0.0, end=inf)
+        return provider
+
     for u, v in topology.edges:
         if rng.random() >= down_probability:
             continue
@@ -322,6 +342,12 @@ def summarize(results: list[ExperimentResult | SRv6ExperimentResult]) -> str:
     """Format aggregate statistics."""
 
     finished = [result for result in results if result.status is TraversalStatus.FINISHED]
+    interrupted = [
+        result
+        for result in results
+        if result.status
+        in {TraversalStatus.TEMPORARILY_UNREACHABLE, TraversalStatus.PARTIAL_RESULT}
+    ]
     status_counts = Counter(result.status.value for result in results)
     success_rate = len(finished) / len(results) if results else 0.0
 
@@ -337,6 +363,7 @@ def summarize(results: list[ExperimentResult | SRv6ExperimentResult]) -> str:
             "-------",
             f"runs: {len(results)}",
             f"finished: {len(finished)}",
+            f"interrupted: {len(interrupted)}",
             f"success_rate: {success_rate:.2%}",
             f"status_counts: {dict(sorted(status_counts.items()))}",
             f"mean_hops: {successful_mean(lambda result: result.hop_count)}",
@@ -414,6 +441,7 @@ def load_config(path: Path) -> ExperimentConfig:
         raw = tomllib.load(file)
 
     experiment = raw.get("experiment", {})
+    scenario = raw.get("scenario", {})
     grid = raw.get("grid", {})
     delay = raw.get("delay", {})
     random_delay = raw.get("random_delay", {})
@@ -426,11 +454,21 @@ def load_config(path: Path) -> ExperimentConfig:
 
     max_hop = int(traversal.get("max_hop", 0))
     run_name = str(output.get("run_name", "")).strip()
+    scenario_count = scenario.get("count", experiment.get("runs", 20))
+    seed = scenario.get("seed", experiment.get("seed", 7))
+    failure_mode = str(failure.get("mode", "probability"))
+    down_edges_per_scenario = failure.get("down_edges_per_scenario")
+    interrupted_statuses = parse_traversal_statuses(
+        scenario.get(
+            "interrupt_statuses",
+            ["temporarily_unreachable", "partial_result"],
+        )
+    )
     config = ExperimentConfig(
-        runs=int(experiment.get("runs", 20)),
+        runs=int(scenario_count),
         rows=int(grid.get("rows", 10)),
         cols=int(grid.get("cols", 10)),
-        seed=int(experiment.get("seed", 7)),
+        seed=int(seed),
         period_slots=int(delay.get("period_slots", 8)),
         delay_model=str(delay.get("model", "leo")),
         min_delay=float(random_delay.get("min_delay", 0.8)),
@@ -438,7 +476,12 @@ def load_config(path: Path) -> ExperimentConfig:
         intra_delay=float(leo_delay.get("intra_delay", 1.0)),
         inter_min_delay=float(leo_delay.get("inter_min_delay", 1.2)),
         inter_max_delay=float(leo_delay.get("inter_max_delay", 3.0)),
+        failure_mode=failure_mode,
         down_probability=float(failure.get("down_probability", 0.18)),
+        down_edges_per_scenario=(
+            None if down_edges_per_scenario in (None, "") else int(down_edges_per_scenario)
+        ),
+        interrupted_statuses=interrupted_statuses,
         max_hop=None if max_hop == 0 else max_hop,
         alpha=float(traversal.get("alpha", 0.85)),
         step_time=float(simulation.get("step_time", 1.0)),
@@ -473,8 +516,16 @@ def validate_config(config: ExperimentConfig, path: Path) -> None:
         raise ValueError(f"{path}: leo_delay values must be non-negative")
     if config.inter_max_delay < config.inter_min_delay:
         raise ValueError(f"{path}: leo_delay.inter_max_delay must be >= inter_min_delay")
+    if config.failure_mode not in {"probability", "fixed_count"}:
+        raise ValueError(f"{path}: failure.mode must be 'probability' or 'fixed_count'")
     if not 0 <= config.down_probability <= 1:
         raise ValueError(f"{path}: failure.down_probability must be in [0, 1]")
+    if config.down_edges_per_scenario is not None and config.down_edges_per_scenario < 0:
+        raise ValueError(f"{path}: failure.down_edges_per_scenario must be non-negative")
+    if config.failure_mode == "fixed_count" and config.down_edges_per_scenario is None:
+        raise ValueError(
+            f"{path}: failure.down_edges_per_scenario is required when failure.mode='fixed_count'"
+        )
     if config.max_hop is not None and config.max_hop < 0:
         raise ValueError(f"{path}: traversal.max_hop must be non-negative")
     if not 0 < config.alpha <= 1:
@@ -506,41 +557,6 @@ def make_run_dir(base_dir: Path, run_name: str | None, timestamp: str) -> Path:
             candidate.mkdir()
             return candidate
     raise RuntimeError(f"could not allocate a run directory under {base_dir}")
-
-
-def safe_run_name(value: str) -> str:
-    """Return a filesystem-friendly run name."""
-
-    cleaned = "".join(char if char.isalnum() or char in {"-", "_", "."} else "_" for char in value)
-    cleaned = cleaned.strip("._-")
-    return cleaned or "run"
-
-
-def write_json_file(path: Path, payload: object) -> None:
-    """Write an indented JSON file."""
-
-    path.write_text(json.dumps(to_jsonable(payload), indent=2, sort_keys=True) + "\n", encoding="utf-8")
-
-
-def write_jsonl(handle, payload: object) -> None:
-    """Write one JSON object line."""
-
-    handle.write(json.dumps(to_jsonable(payload), sort_keys=True) + "\n")
-    handle.flush()
-
-
-def to_jsonable(value: object) -> object:
-    """Convert dataclasses and enums into JSON-serializable values."""
-
-    if isinstance(value, Enum):
-        return value.value
-    if hasattr(value, "__dataclass_fields__"):
-        return to_jsonable(asdict(value))
-    if isinstance(value, dict):
-        return {str(key): to_jsonable(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [to_jsonable(item) for item in value]
-    return value
 
 
 def main() -> None:
@@ -579,6 +595,10 @@ def main() -> None:
     )
     emit(f"config: {args.config}")
     emit(f"output_dir: {run_dir}")
+    emit(f"scenarios: {config.runs}")
+    emit(f"nodes: {len(topology.nodes)}")
+    emit(f"random_failure_mode: {config.failure_mode}")
+    emit(f"interrupt_statuses: {[status.value for status in config.interrupted_statuses]}")
     if config.srv6_enabled:
         emit(
             "run status                  visited   hops actual_delay down_edges "
@@ -630,6 +650,11 @@ def main() -> None:
                     topology,
                     rng=run_rng,
                     down_probability=config.down_probability,
+                    down_edges_per_scenario=(
+                        config.down_edges_per_scenario
+                        if config.failure_mode == "fixed_count"
+                        else None
+                    ),
                 )
                 if config.srv6_enabled:
                     result, policy_events = run_one_srv6_experiment(
@@ -666,6 +691,11 @@ def main() -> None:
                         f"{result.mean_srh_overhead_bytes:>14.2f} "
                         f"{result.max_srh_overhead_bytes:>13}"
                     )
+                    if result.status in config.interrupted_statuses:
+                        emit(
+                            f"    scenario {run_id} interrupted by {result.status.value}; "
+                            "starting next scenario"
+                        )
                 else:
                     result = run_one_experiment(
                         run_id=run_id,
@@ -690,6 +720,11 @@ def main() -> None:
                         f"{result.mean_active_down_edges:>16.2f} "
                         f"{result.max_active_down_edges:>15}"
                     )
+                    if result.status in config.interrupted_statuses:
+                        emit(
+                            f"    scenario {run_id} interrupted by {result.status.value}; "
+                            "starting next scenario"
+                        )
     finally:
         if policy_events_file is not None:
             policy_events_file.close()

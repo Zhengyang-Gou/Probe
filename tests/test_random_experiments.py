@@ -10,6 +10,7 @@ assert SPEC.loader is not None
 random_experiments = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = random_experiments
 SPEC.loader.exec_module(random_experiments)
+build_random_provider = random_experiments.build_random_provider
 load_config = random_experiments.load_config
 make_run_dir = random_experiments.make_run_dir
 main = random_experiments.main
@@ -35,9 +36,50 @@ cols = 2
     assert config.srv6_locator_prefix == "fc00:0"
     assert config.srv6_base_srh_overhead_bytes == 8
     assert config.srv6_per_sid_overhead_bytes == 16
+    assert config.failure_mode == "probability"
+    assert config.down_edges_per_scenario is None
+    assert [status.value for status in config.interrupted_statuses] == [
+        "temporarily_unreachable",
+        "partial_result",
+    ]
     assert config.output_dir == "logs/random"
     assert config.run_name is None
     assert config.write_stdout is True
+
+
+def test_load_config_reads_scenario_and_fixed_count_failure(tmp_path) -> None:
+    path = tmp_path / "experiment.toml"
+    path.write_text(
+        """
+[scenario]
+count = 7
+seed = 42
+interrupt_statuses = ["temporarily_unreachable"]
+
+[grid]
+rows = 10
+cols = 10
+
+[failure]
+mode = "fixed_count"
+down_edges_per_scenario = 12
+down_probability = 0.25
+""",
+        encoding="utf-8",
+    )
+
+    config = load_config(path)
+
+    assert config.runs == 7
+    assert config.seed == 42
+    assert config.rows == 10
+    assert config.cols == 10
+    assert config.failure_mode == "fixed_count"
+    assert config.down_edges_per_scenario == 12
+    assert config.down_probability == 0.25
+    assert [status.value for status in config.interrupted_statuses] == [
+        "temporarily_unreachable"
+    ]
 
 
 def test_load_config_reads_srv6_block(tmp_path) -> None:
@@ -95,6 +137,41 @@ base_srh_overhead_bytes = -1
 
     with pytest.raises(ValueError, match="srv6.base_srh_overhead_bytes"):
         load_config(path)
+
+
+def test_load_config_rejects_fixed_count_without_edge_count(tmp_path) -> None:
+    path = tmp_path / "experiment.toml"
+    path.write_text(
+        """
+[experiment]
+runs = 1
+
+[grid]
+rows = 2
+cols = 2
+
+[failure]
+mode = "fixed_count"
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="failure.down_edges_per_scenario"):
+        load_config(path)
+
+
+def test_fixed_count_random_provider_selects_exact_edge_count() -> None:
+    topology = random_experiments.make_grid_topology(4, 4)
+    rng = random_experiments.random.Random(1)
+
+    provider = build_random_provider(
+        topology,
+        rng=rng,
+        down_probability=0.0,
+        down_edges_per_scenario=5,
+    )
+
+    assert len(provider.down_intervals) == 5
 
 
 def test_make_run_dir_allocates_unique_folder(tmp_path) -> None:

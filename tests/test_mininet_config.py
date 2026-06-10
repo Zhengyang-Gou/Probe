@@ -109,6 +109,43 @@ def test_cli_args_override_toml() -> None:
     assert config.enable_cli is False
 
 
+def test_cli_args_parse_multiple_failure_edges() -> None:
+    config = config_from_args(
+        [
+            "--planes",
+            "4",
+            "--satellites-per-plane",
+            "4",
+            "--failure-edges",
+            "0,1;5,9;9,5",
+            "--dry-run",
+        ]
+    )
+
+    assert config.failure_edges == ((0, 1), (5, 9))
+
+
+def test_config_file_reads_multiple_failure_edges(tmp_path) -> None:
+    config_path = tmp_path / "mininet.toml"
+    config_path.write_text(
+        """
+[constellation]
+planes = 4
+satellites_per_plane = 4
+
+[failure]
+edges = [[0, 1], [5, 9], [9, 5]]
+start = 0
+end = 10
+""",
+        encoding="utf-8",
+    )
+
+    config = load_config(config_path)
+
+    assert config.failure_edges == ((0, 1), (5, 9))
+
+
 def test_make_run_dir_allocates_unique_folder(tmp_path) -> None:
     first = _make_run_dir(tmp_path, "my run", "20260609_120000")
     second = _make_run_dir(tmp_path, "my run", "20260609_120000")
@@ -160,7 +197,7 @@ def test_each_node_has_transit_and_decap_sid_routes() -> None:
         "action",
         "End",
         "dev",
-        "lo",
+        "r1-r0",
     ] in commands
     assert [
         "ip",
@@ -171,11 +208,11 @@ def test_each_node_has_transit_and_decap_sid_routes() -> None:
         "encap",
         "seg6local",
         "action",
-        "End.DX6",
-        "nh6",
-        "::",
+        "End.DT6",
+        "table",
+        "255",
         "dev",
-        "lo",
+        "r1-r0",
     ] in commands
 
 

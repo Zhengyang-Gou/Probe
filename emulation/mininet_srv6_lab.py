@@ -32,7 +32,7 @@ from adaptive_leo_traversal.delay_table import DelayTable
 from adaptive_leo_traversal.cycle import make_grid_hamiltonian_cycle
 from adaptive_leo_traversal.linux_srv6 import (
     render_enable_srv6_sysctls,
-    render_end_dx6_sid_route,
+    render_end_dt6_sid_route,
     render_local_ipv6_route,
     render_node_sid_route,
     render_plain_ipv6_route,
@@ -84,6 +84,7 @@ class MininetSrv6Config:
     dynamic_topology_model: str = "static"
     dynamic_topology_period_slots: int = 1
     failure_edge: Edge | None = None
+    failure_edges: tuple[Edge, ...] = ()
     failure_start: float = 0.0
     failure_end: float = 0.0
     algorithm_mode: str = "root_target"
@@ -220,6 +221,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--altitude-km", type=float, default=None)
     parser.add_argument("--inclination-deg", type=float, default=None)
     parser.add_argument("--failure-edge", type=str, default=None, help='failure edge as "u,v"')
+    parser.add_argument(
+        "--failure-edges",
+        type=str,
+        default=None,
+        help='multiple failure edges as "u,v;a,b"',
+    )
     parser.add_argument("--failure-start", type=float, default=None)
     parser.add_argument("--failure-end", type=float, default=None)
     parser.add_argument("--dynamic-topology", action="store_true", default=None)
@@ -338,6 +345,8 @@ def load_config(path: str | Path) -> MininetSrv6Config:
     failure = _table(data, "failure")
     if "edge" in failure:
         config = replace(config, failure_edge=_parse_failure_edge(failure["edge"]))
+    if "edges" in failure:
+        config = replace(config, failure_edges=_parse_failure_edges(failure["edges"]))
     if "start" in failure:
         config = replace(config, failure_start=float(failure["start"]))
     if "end" in failure:
@@ -439,8 +448,7 @@ def run_dry_run(config: MininetSrv6Config) -> None:
         _print_adaptive_traversal_dry_run(config, state, printer)
         return
 
-    active = _failure_active(config, 0.0)
-    effective_topology = _effective_topology(state.topology, config.failure_edge, active)
+    effective_topology = state.topology.without_edges(_down_edges_at(config, state, 0.0))
     policy = _render_root_target_policy(config, state, effective_topology)
     printer.run(f"r{config.root}", policy.command)
     _print_validation_commands(printer, config, state, policy)
@@ -489,24 +497,6 @@ def _print_adaptive_traversal_dry_run(
             break
         probe.current_node = result.next_hop
         elapsed = round(elapsed + config.slot_seconds, 6)
-
-
-def _print_failure_qdisc(
-    printer: DryRunPrinter,
-    config: MininetSrv6Config,
-    active: bool,
-    reason: str,
-) -> None:
-    if config.failure_edge is None:
-        return
-    u, v = config.failure_edge
-    printer.note(f"{reason}: link r{u}<->r{v}")
-    if active:
-        printer.run(f"r{u}", render_tc_loss100(edge_iface_name(u, v)))
-        printer.run(f"r{v}", render_tc_loss100(edge_iface_name(v, u)))
-    else:
-        printer.run(f"r{u}", render_tc_netem(edge_iface_name(u, v), delay_ms=config.default_delay_ms))
-        printer.run(f"r{v}", render_tc_netem(edge_iface_name(v, u), delay_ms=config.default_delay_ms))
 
 
 def _print_link_impairments(
@@ -874,8 +864,9 @@ def _build_lab_state(config: MininetSrv6Config) -> LabState:
     _validate_config(config)
     constellation = _constellation_config(config)
     topology = make_constellation_topology(constellation)
-    if config.failure_edge is not None and config.failure_edge not in topology.edges:
-        raise ValueError(f"failure edge {config.failure_edge} is not in the constellation topology")
+    for edge in _configured_failure_edges(config):
+        if edge not in topology.edges:
+            raise ValueError(f"failure edge {edge} is not in the constellation topology")
     delay_table = build_constellation_delay_table(
         topology,
         constellation,
@@ -975,8 +966,8 @@ def _build_ping_link_state_provider(
 
 def _down_edges_at(config: MininetSrv6Config, state: LabState, now: float) -> set[Edge]:
     down = _scheduled_down_edges_at(config, state, now)
-    if config.failure_edge is not None and _failure_active(config, now):
-        down.add(config.failure_edge)
+    if _failure_active(config, now):
+        down.update(_configured_failure_edges(config))
     return down
 
 
@@ -1057,6 +1048,7 @@ def _render_node_setup_commands(
     node: int,
 ) -> list[list[str]]:
     ifaces = [edge_iface_name(node, neighbor) for neighbor in sorted(state.topology.neighbors(node))]
+    sid_dev = ifaces[0] if ifaces else "lo"
     commands = [["ip", "link", "set", "lo", "up"]]
     commands.extend(render_enable_srv6_sysctls(ifaces))
     commands.append(["ip", "-6", "route", "del", "default"])
@@ -1065,14 +1057,14 @@ def _render_node_setup_commands(
         commands.append(["ip", "link", "set", iface, "up"])
         commands.append(["ip", "-6", "addr", "add", _link_addr(config, state, node, neighbor), "dev", iface])
     commands.append(["ip", "-6", "addr", "add", _service_addr(config, node), "dev", "lo"])
-    # Keep the service loopback explicit in the local table for local delivery after decap.
+    # Keep the service loopback explicit for local delivery after decap.
     commands.append(render_local_ipv6_route(_service_addr(config, node), dev="lo", table=config.decap_table))
-    commands.append(render_node_sid_route(state.allocator.node_sid(node), dev="lo"))
+    commands.append(render_node_sid_route(state.allocator.node_sid(node), dev=sid_dev))
     commands.append(
-        render_end_dx6_sid_route(
+        render_end_dt6_sid_route(
             state.allocator.decap_sid(node),
-            nh6="::",
-            dev="lo",
+            lookup_table=config.decap_table,
+            dev=sid_dev,
         )
     )
     return commands
@@ -1212,18 +1204,6 @@ def _install_rendered_policy(
     return policy
 
 
-def _apply_default_delay(
-    config: MininetSrv6Config,
-    state: LabState,
-    hosts: dict[int, Any],
-    runner: NodeCommandRunner,
-    tc_log: TextIO,
-    now: float,
-) -> None:
-    for u, v in sorted(state.topology.edges):
-        _apply_edge_delay(config, hosts, runner, tc_log, now, u, v, "initial_delay")
-
-
 def _apply_link_impairments(
     config: MininetSrv6Config,
     state: LabState,
@@ -1262,36 +1242,6 @@ def _apply_link_impairments(
                 reason,
                 delay_ms=_edge_delay_ms(config, state, now, u, v),
             )
-
-
-def _apply_failure_qdisc(
-    config: MininetSrv6Config,
-    hosts: dict[int, Any],
-    runner: NodeCommandRunner,
-    tc_log: TextIO,
-    now: float,
-    active: bool,
-    reason: str,
-) -> None:
-    if config.failure_edge is None:
-        return
-    u, v = config.failure_edge
-    if active:
-        interfaces = [edge_iface_name(u, v), edge_iface_name(v, u)]
-        runner.run(hosts[u], render_tc_loss100(interfaces[0]))
-        runner.run(hosts[v], render_tc_loss100(interfaces[1]))
-        _write_jsonl(
-            tc_log,
-            {
-                "time": now,
-                "edge": [u, v],
-                "interfaces": interfaces,
-                "action": "loss100",
-                "reason": reason,
-            },
-        )
-    else:
-        _apply_edge_delay(config, hosts, runner, tc_log, now, u, v, reason)
 
 
 def _apply_edge_delay(
@@ -1447,22 +1397,19 @@ def _stop_tcpdump(proc: subprocess.Popen[str], runner: NodeCommandRunner) -> Non
         proc.wait(timeout=3)
 
 
-def _effective_topology(
-    topology: Topology,
-    failure_edge: Edge | None,
-    failure_active: bool,
-) -> Topology:
-    if failure_edge is None or not failure_active:
-        return topology
-    return topology.without_edges({failure_edge})
-
-
 def _failure_active(config: MininetSrv6Config, now: float) -> bool:
     return (
-        config.failure_edge is not None
+        bool(_configured_failure_edges(config))
         and config.failure_start <= now < config.failure_end
         and config.failure_end > config.failure_start
     )
+
+
+def _configured_failure_edges(config: MininetSrv6Config) -> set[Edge]:
+    edges = set(config.failure_edges)
+    if config.failure_edge is not None:
+        edges.add(config.failure_edge)
+    return edges
 
 
 def _link_addr(
@@ -1573,6 +1520,8 @@ def _merge_cli_args(
         updates["cols"] = updates["satellites_per_plane"]
     if args.failure_edge is not None:
         updates["failure_edge"] = _parse_failure_edge(args.failure_edge)
+    if args.failure_edges is not None:
+        updates["failure_edges"] = _parse_failure_edges(args.failure_edges)
     if args.dynamic_topology is not None:
         updates["dynamic_topology_enabled"] = args.dynamic_topology
     if args.enable_agents is not None:
@@ -1667,6 +1616,16 @@ def _parse_failure_edge(value: object) -> Edge:
     if len(parts) != 2:
         raise ValueError('failure edge must contain exactly two nodes, e.g. "0,1"')
     return normalize_edge(int(parts[0]), int(parts[1]))
+
+
+def _parse_failure_edges(value: object) -> tuple[Edge, ...]:
+    if isinstance(value, str):
+        raw_edges: list[object] = [part.strip() for part in value.split(";") if part.strip()]
+    elif isinstance(value, (list, tuple)):
+        raw_edges = list(value)
+    else:
+        raise ValueError('failure edges must be "u,v;a,b" or a list of two-item lists')
+    return tuple(sorted({_parse_failure_edge(edge) for edge in raw_edges}))
 
 
 def _table(data: dict[str, Any], name: str) -> dict[str, Any]:

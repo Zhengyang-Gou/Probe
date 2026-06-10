@@ -154,6 +154,64 @@ sudo python3 -m emulation.mininet_srv6_lab --config config/mininet_srv6.toml \
   --no-dynamic-topology --disable-agents --no-probe-packet-validation --no-cli
 ```
 
+## Batch Mininet Scenarios
+
+For larger experiment campaigns, use the batch runner:
+
+```bash
+python3 -m emulation.mininet_batch_experiments --config config/mininet_batch_experiments.toml
+```
+
+The default batch config is a dry run. It uses a 10 x 10 constellation, i.e. 100
+Mininet nodes, and generates randomized link-failure scenarios. Set:
+
+```toml
+[execution]
+dry_run = false
+```
+
+Then run with root privileges for real Mininet/SRv6/tc execution:
+
+```bash
+sudo python3 -m emulation.mininet_batch_experiments --config config/mininet_batch_experiments.toml
+```
+
+Each scenario starts a fresh `emulation.mininet_srv6_lab` run. If traversal
+terminates with a configured status such as `temporarily_unreachable` or
+`partial_result`, that scenario is recorded and the batch runner immediately
+starts the next one.
+
+Scenario count and failure policy are configured in one TOML file:
+
+```toml
+[scenario]
+count = 20
+interrupt_statuses = ["temporarily_unreachable", "partial_result"]
+
+[failure]
+mode = "probability"
+down_probability = 0.1
+
+# or:
+mode = "fixed_count"
+down_edges_per_scenario = 18
+```
+
+The batch output directory contains:
+
+```text
+logs/mininet-batch/<batch>/
+  batch_config.json
+  summary.txt
+  scenarios.jsonl
+  <scenario>.stdout.log
+  <scenario>/
+    run_config.json
+    traversal_events.jsonl
+    policy_updates.jsonl
+    tc_updates.jsonl
+```
+
 ## Inspecting the Lab
 
 When the script enters the Mininet CLI, inspect routes and tc state with:
@@ -171,11 +229,13 @@ tc qdiscs mention different names, check that `addLink` used `intfName1` and
 ## What Is Real
 
 - Linux SRv6 routes are installed inside Mininet host namespaces with iproute2.
-- Transit Node SIDs use `seg6local action End`.
+- Transit Node SIDs use `seg6local action End` on a node interface rather than
+  `lo`, because Linux processes SRv6 local actions on the route device.
 - Every node also has a separate decapsulation SID using
-  `seg6local action End.DX6 nh6 ::`, so any Hamiltonian telemetry target can
-  be the final SRv6 segment and decapsulated probe traffic is delivered by the
-  local IPv6 route to the service loopback.
+  `seg6local action End.DT6 table <decap-table>` on a node interface, so any
+  Hamiltonian telemetry target can be the final SRv6 segment and decapsulated
+  probe traffic is delivered to that node's UDP agent through the service
+  loopback local route.
 - Source policies use `encap seg6 mode encap`.
 - Plain IPv6 routes to every node's service loopback are installed as return
   paths for validation traffic.

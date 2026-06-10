@@ -102,8 +102,25 @@ python3 scripts/random_experiments.py
 ```
 
 The script reads settings from `config/random_experiments.toml` by default. Edit
-that file to change the number of runs, grid size, delay model, failure
-probability, traversal parameters, simulation step time, and output directory.
+that file to change the number of scenarios, grid size, delay model, random
+failure mode, traversal parameters, simulation step time, and output directory.
+The default config is a 10x10 grid, i.e. 100 simulated satellite nodes.
+Terminal statuses such as `temporarily_unreachable` and `partial_result` stop
+the current scenario and the runner immediately starts the next configured
+scenario.
+
+Random failure selection supports two modes:
+
+```toml
+[failure]
+mode = "probability"
+down_probability = 0.1
+
+# or:
+mode = "fixed_count"
+down_edges_per_scenario = 18
+```
+
 Each run writes a folder under `[output].base_dir`, for example:
 
 ```text
@@ -180,6 +197,17 @@ python3 -m emulation.mininet_srv6_lab --config config/mininet_srv6.toml \
 sudo python3 -m emulation.mininet_srv6_lab --config config/mininet_srv6.toml \
   --no-dynamic-topology --disable-agents --no-probe-packet-validation --no-cli
 ```
+
+For randomized multi-scenario Mininet campaigns, use the batch runner:
+
+```bash
+python3 -m emulation.mininet_batch_experiments --config config/mininet_batch_experiments.toml
+```
+
+The sample batch config runs dry by default and is set up for a 10x10
+constellation, randomized link failures, and interrupted scenario statuses such
+as `temporarily_unreachable` and `partial_result`. Set `[execution].dry_run =
+false` and run with `sudo` for real Mininet execution.
 
 When checking connectivity from the Mininet CLI, prefer the current policy
 source node's service-loopback address so replies have a routed return path:

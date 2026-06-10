@@ -1,8 +1,13 @@
-[experiment]
-runs = 2000
+[scenario]
+# Number of randomized experiment scenarios to run.
+count = 2000
 seed = 7
+# When a scenario reaches one of these terminal statuses, it is recorded and
+# the runner immediately starts the next scenario.
+interrupt_statuses = ["temporarily_unreachable", "partial_result"]
 
 [grid]
+# 10 x 10 = 100 simulated satellite nodes.
 rows = 10
 cols = 10
 
@@ -20,7 +25,11 @@ min_delay = 0.8
 max_delay = 3.0
 
 [failure]
+# "probability": each edge is independently selected with down_probability.
+# "fixed_count": exactly down_edges_per_scenario random edges are selected.
+mode = "probability"
 down_probability = 0.1
+down_edges_per_scenario = 18
 
 [traversal]
 max_hop = 0

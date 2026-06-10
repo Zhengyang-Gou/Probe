@@ -1,0 +1,62 @@
+[scenario]
+# Number of Mininet scenarios to execute.
+count = 20
+seed = 7
+# These terminal traversal statuses are recorded as interrupted scenarios;
+# the batch runner then starts the next scenario.
+interrupt_statuses = ["temporarily_unreachable", "partial_result"]
+
+[execution]
+lab_config = "config/mininet_srv6.toml"
+# Keep true for command validation without root/Mininet startup. Set false for
+# real Mininet runs and start with sudo.
+dry_run = true
+continue_on_runner_error = true
+
+[constellation]
+# 10 x 10 = 100 Mininet nodes. This is heavy; reduce while debugging.
+planes = 10
+satellites_per_plane = 10
+
+[emulation]
+duration = 120
+slot_seconds = 1
+
+[delay]
+model = "propagation"
+period_slots = 8
+
+[dynamic_topology]
+enabled = true
+model = "rotating_seam"
+period_slots = 8
+
+[algorithm]
+root = 0
+mode = "adaptive_traversal"
+max_hop = 3000
+alpha = 0.85
+validate_each_policy = true
+
+[observation]
+mode = "ping"
+stale_after_seconds = 2
+
+[agent]
+enabled = true
+probe_packet_validation = true
+udp_port = 5005
+
+[failure]
+# "probability": each physical edge is independently selected.
+# "fixed_count": exactly down_edges_per_scenario random edges are selected.
+mode = "probability"
+down_probability = 0.1
+down_edges_per_scenario = 18
+start = 0
+end = 120
+
+[output]
+base_dir = "logs/mininet-batch"
+run_name = "mininet_100_nodes"
+write_stdout = true
